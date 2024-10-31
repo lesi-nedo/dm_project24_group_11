@@ -1,15 +1,16 @@
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
+import numpy as np
 import psutil
-
-from matplotlib.legend_handler import HandlerPathCollection
-
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from typing import Tuple, Optional
+from dataclasses import dataclass
 from sklearn.pipeline import Pipeline
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.model_selection import RandomizedSearchCV
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import make_scorer
 from scipy.stats import randint
@@ -21,101 +22,6 @@ def update_legend_marker_size(handle, orig):
     "Customize size of the legend marker"
     handle.update_from(orig)
     handle.set_sizes([20])
-
-def visualize_outliers(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.ndarray) -> None:
-    """
-    Create enhanced visualizations for outlier detection results.
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame containing features to detect outliers
-    lof_scores : numpy.ndarray
-        LOF scores from the model
-    mask : numpy.ndarray
-        Boolean mask indicating outliers
-    """
-
-    
-    # Create figure with subplots
-    fig = plt.figure(figsize=(15, 7))
-    gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
-
-    # Plot 1: PCA visualization with improved aesthetics
-    ax1 = fig.add_subplot(gs[0])
-    
-    # Separate outliers and inliers
-    outliers = df[mask]
-    inliers = df[~mask]
-    
-    # Apply PCA
-    pca = PCA(n_components=2)
-    X = df.values
-    X_pca = pca.fit_transform(X)
-    X_outliers = pca.transform(outliers.values)
-    X_inliers = pca.transform(inliers.values)
-    
-    # Create enhanced scatter plot
-    ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], 
-               c='royalblue', label='Inliers', alpha=0.6, s=50)
-    ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], 
-               c='crimson', label='Outliers', alpha=0.8, s=100)
-    
-    # Add explanatory text
-    variance_ratio = pca.explained_variance_ratio_
-    ax1.set_xlabel(f'First Principal Component\n({variance_ratio[0]:.1%} variance explained)')
-    ax1.set_ylabel(f'Second Principal Component\n({variance_ratio[1]:.1%} variance explained)')
-    ax1.set_title('PCA Projection of Data\nwith Outlier Detection', pad=20)
-    ax1.legend()
-    
-    # Add grid for better readability
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: LOF scores visualization
-    ax2 = fig.add_subplot(gs[1])
-    
-    # Calculate normalized radius for circles
-    radius = (lof_scores.max() - lof_scores) / (lof_scores.max() - lof_scores.min())
-    
-    # Create enhanced LOF visualization
-    ax2.scatter(X_pca[:, 0], X_pca[:, 1], 
-               color="darkblue", s=30, alpha=0.6, label="Data points")
-    
-    # Plot circles with radius proportional to the outlier scores
-    scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1],
-                         s=1000 * radius,
-                         edgecolors="crimson",
-                         facecolors="none",
-                         alpha=0.5,
-                         label="Outlier scores")
-    
-    # Customize the LOF plot
-    ax2.set_title('Local Outlier Factor (LOF) Scores\nCircle Size ∝ Anomaly Score', pad=20)
-    ax2.set_xlabel('First Principal Component')
-    ax2.set_ylabel('Second Principal Component')
-    ax2.grid(True, alpha=0.3)
-    
-    # Add legend with custom handler
-    def update_legend_marker_size(handle, orig):
-        handle.update_from(orig)
-        handle.set_sizes([100])
-    
-    ax2.legend(handler_map={scatter: HandlerPathCollection(update_func=update_legend_marker_size)})
-    
-    # Add colorbar to show LOF score distribution
-    norm = plt.Normalize(lof_scores.min(), lof_scores.max())
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.RdYlBu_r, norm=norm)
-    plt.colorbar(sm, ax=ax2, label='LOF Score', alpha=0.7)
-    
-    # Adjust layout
-    plt.tight_layout()
-    plt.show()
-    
-    # Additional statistical summary
-    print("\nOutlier Detection Summary:")
-    print(f"Total points: {len(df)}")
-    print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-    print(f"LOF Score Range: {lof_scores.min():.2f} to {lof_scores.max():.2f}")
 
 
 def visualize_outliers_3d(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.ndarray) -> None:
@@ -252,150 +158,218 @@ def visualize_outliers_3d(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.nda
     plt.show()
 
 
-def lof_scoring(estimator, X):
-    """
-    Advanced scoring function for Local Outlier Factor optimization.
-    
-    Combines multiple metrics to evaluate LOF performance:
-    1. Separation between inlier and outlier scores
-    2. Local density consistency
-    3. Distance-based clustering quality
-    
-    Parameters:
-    -----------
-    estimator : Pipeline
-        Fitted pipeline containing LOF estimator
-    X : array-like
-        Input data to evaluate
-    
-    Returns:
-    --------
-    float
-        Composite score where higher values indicate better outlier detection
-    """
-    # Get LOF estimator from pipeline
-    lof = estimator.named_steps['lof']
+# Use physical CPU cores for heavy computation
+PHYSICAL_CORES = psutil.cpu_count(logical=False)
+# Use more threads for I/O bound operations
+THREAD_COUNT = psutil.cpu_count(logical=True)
+
+@dataclass
+class LOFParams:
+    """Dataclass to store LOF parameters"""
+    n_neighbors: int
+    contamination: float
+    leaf_size: int
+    p: int
+    metric: str
+
+def parallel_lof_scoring(params: LOFParams, X: np.ndarray) -> Tuple[float, LOFParams]:
+    """Enhanced parallel version of LOF scoring with better metrics"""
+    pipeline = Pipeline([
+        ('scaler', RobustScaler()),
+        ('lof', LocalOutlierFactor(
+            n_neighbors=params.n_neighbors,
+            contamination=params.contamination,
+            leaf_size=params.leaf_size,
+            p=params.p,
+            metric=params.metric
+        ))
+    ])
     
     # Fit LOF and get scores
-    lof.fit(X)
+    pipeline.fit(X)
+    lof = pipeline.named_steps['lof']
     neg_factors = lof.negative_outlier_factor_
     
-    # Calculate score components
-    
-    # 1. Score separation
-    thresh = np.percentile(neg_factors, 90)  # Top 10% threshold
+    # Enhanced scoring system
+    thresh = np.percentile(neg_factors, 95)
     potential_outliers = neg_factors < thresh
+    
+    # Improved separation score with density consideration
     separation_score = np.abs(np.mean(neg_factors[potential_outliers]) - 
                             np.mean(neg_factors[~potential_outliers]))
     
-    # 2. Local density consistency
+    # Enhanced density scoring
     density_var = np.std(neg_factors) / (np.max(neg_factors) - np.min(neg_factors))
-    density_score = 1 / (1 + density_var)  # Normalize to [0,1]
+    density_score = 1 / (1 + density_var)
     
-    # 3. Distance-based quality
+    # Distance-based scoring with neighbor consistency
     distances = lof._distances_fit_X_
     avg_neighbor_dist = np.mean(distances, axis=1)
     distance_score = 1 / (1 + np.std(avg_neighbor_dist))
     
-    # Combine scores with weights
-    final_score = (0.5 * separation_score + 
-                  0.3 * density_score +
-                  0.2 * distance_score)
+    # Additional isolation score
+    isolation_score = np.mean(distances[:, 1:]) / np.mean(distances[:, 0])
     
-    return final_score
+    final_score = (0.4 * separation_score + 
+                  0.3 * density_score +
+                  0.2 * distance_score +
+                  0.1 * isolation_score)
+    
+    return final_score, params
 
 class LOFOutliersDetector:
-
-    def __init__(self, contamination='auto', n_neighbors=10) -> None:
+    def __init__(self, contamination=0.1, n_neighbors=20):
+        # Ensure contamination is within valid range
+        self.contamination = min(max(contamination, 0.01), 0.5)
+        
         self.pipeline = Pipeline([
-            ('scaler', StandardScaler()),
-            ('lof', LocalOutlierFactor(contamination=contamination, n_neighbors=n_neighbors))
+            ('scaler', RobustScaler()),
+            ('lof', LocalOutlierFactor(
+                contamination=self.contamination,
+                n_neighbors=n_neighbors,
+                n_jobs=psutil.cpu_count(logical=False)
+            ))
         ])
-
+        
+        # Updated parameter distributions
         self.param_distributions = {
-            'lof__n_neighbors': randint(5, 50),
-            'lof__contamination': [0.1, 0.2, 0.3, 0.4, 0.5],
-            'lof__leaf_size': randint(20, 50),
-            'lof__p': [1, 2, 3]
+            'n_neighbors': randint(15, 50),
+            'contamination': [0.01, 0.05, 0.1, 0.15, 0.2],
+            'leaf_size': randint(20, 50),
+            'p': [1, 2],
+            'metric': ['euclidean', 'manhattan', 'minkowski']
         }
-    
 
-    def fit_predict_with_search(self, df: pd.DataFrame, plot_results=True, n_iter: int=20, cv: int=5, verbose: int=1) -> pd.DataFrame:
-        """
-            Fit and predict outliers using Local Outlier Factor with RandomizedSearchCV
+    def _generate_param_combinations(self, n_iter: int) -> list:
+        """Generate parameter combinations with enhanced constraints"""
+        params_list = []
+        for _ in range(n_iter):
+            params = LOFParams(
+                n_neighbors=np.random.randint(15, 50),
+                contamination=np.random.choice([0.01, 0.05, 0.1, 0.15, 0.2]),
+                leaf_size=np.random.randint(20, 50),
+                p=np.random.choice([1, 2]),
+                metric=np.random.choice(['euclidean', 'manhattan', 'minkowski'])
+            )
+            params_list.append(params)
+        return params_list
 
-            Parameters:
-            -----------
-            df : pandas.DataFrame
-                DataFrame containing features to detect outliers
-            
-            
-            n_iter : int
-                Number of iterations to run RandomizedSearchCV
-            
-            cv : int
-                Number of cross-validation folds
+    def _adaptive_contamination(self, scores: np.ndarray) -> float:
+        """Adaptively determine contamination based on score distribution with bounds checking"""
+        # Use Interquartile Range (IQR) method
+        q1, q3 = np.percentile(scores, [25, 75])
+        iqr = q3 - q1
+        threshold = q1 - 1.5 * iqr
+        
+        # Calculate adaptive contamination
+        contamination = np.mean(scores < threshold)
+        
+        # Ensure contamination is within valid range (0, 0.5]
+        contamination = min(max(contamination, 0.01), 0.5)
+        
+        return contamination
 
-            verbose : bool
-                Verbosity level
-            
-            Returns:
-            --------
-            pandas.DataFrame
-                DataFrame containing outliers
-            
-        """
+    def fit_predict_with_search(self, df: pd.DataFrame, n_iter: int = 30, plot_results: bool = True) -> pd.DataFrame:
+        """Enhanced parameter search with adaptive contamination"""
         X = df.values
-        warnings.filterwarnings("ignore")
-        search = RandomizedSearchCV(
-            self.pipeline, 
-            self.param_distributions, 
-            n_iter=n_iter, 
-            cv=cv, 
-            n_jobs=int(real_cpu_count * 0.3),
-            verbose=verbose,
-            scoring=make_scorer(lof_scoring)
+        params_list = self._generate_param_combinations(n_iter)
+        
+        # Parallel parameter search
+        with ProcessPoolExecutor(max_workers=psutil.cpu_count(logical=False)) as executor:
+            results = list(executor.map(
+                partial(parallel_lof_scoring, X=X),
+                params_list
+            ))
+        
+        # Find best parameters
+        best_score, best_params = max(results, key=lambda x: x[0])
+        
+        # Pre-fit to get initial scores
+        initial_lof = LocalOutlierFactor(contamination=0.1, n_neighbors=best_params.n_neighbors)
+        initial_lof.fit(X)
+        initial_scores = -initial_lof.negative_outlier_factor_
+        
+        # Calculate adaptive contamination with bounds checking
+        adaptive_contamination = self._adaptive_contamination(initial_scores)
+        
+        # Configure pipeline with best parameters and adaptive contamination
+        self.pipeline.named_steps['lof'].set_params(
+            n_neighbors=best_params.n_neighbors,
+            contamination=adaptive_contamination,
+            leaf_size=best_params.leaf_size,
+            p=best_params.p,
+            metric=best_params.metric
         )
-        search.fit(X)
-        best_estimator = search.best_estimator_
-        outliers = best_estimator.fit_predict(X)
-        self.mask = outliers == -1
-
-        if plot_results:
-            self._visualize_outliers(df)
-
-        warnings.filterwarnings("default")
-
-        return df[self.mask]
-    
-    def fit_predict(self, df: pd.DataFrame, plot_results=True) -> pd.DataFrame:
-        """
-            Fit and predict outliers using Local Outlier Factor
-
-            Parameters:
-            -----------
-            df : pandas.DataFrame
-                DataFrame containing features to detect outliers
-            
-            Returns:
-            --------
-            pandas.DataFrame
-                DataFrame containing outliers
-            
-        """
-        X = df.values
+        
+        # Final fit and predict
         outliers = self.pipeline.fit_predict(X)
         self.mask = outliers == -1
-
-        if plot_results and df.shape[1] > 2:
-            visualize_outliers_3d(df, self.pipeline.named_steps['lof'].negative_outlier_factor_, self.mask)
-        elif plot_results:
-            visualize_outliers(df, self.pipeline.named_steps['lof'].negative_outlier_factor_, self.mask)
-
+        
+        if plot_results:
+            print(f"Best parameters: {best_params}")
+            print(f"Adaptive contamination: {adaptive_contamination:.3f}")
+            print(f"Best score: {best_score:.4f}")
+            self._plot(df)
+        
         return df[self.mask]
-    
 
+    def _plot(self, df):
+        if df.shape[1] > 2:
+            visualize_outliers_3d(
+                df,
+                self.pipeline.named_steps['lof'].negative_outlier_factor_,
+                self.mask
+            )
+        else:
+            visualize_outliers(
+                df,
+                self.pipeline.named_steps['lof'].negative_outlier_factor_,
+                self.mask
+            )
 
+# Optimize visualization functions
+def visualize_outliers(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.ndarray,
+                      fig_size: Tuple[int, int] = (15, 7)) -> None:
+    """Optimized 2D visualization"""
+    with plt.style.context('seaborn-v0_8-whitegrid'):  # Use context manager for style
+        fig = plt.figure(figsize=fig_size)
+        gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
+        
+        # Perform PCA once and reuse results
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(df.values)
+        
+        # Plot 1: PCA visualization
+        ax1 = fig.add_subplot(gs[0])
+        ax1.scatter(X_pca[~mask, 0], X_pca[~mask, 1], 
+                   c='royalblue', label='Inliers', alpha=0.6, s=50)
+        ax1.scatter(X_pca[mask, 0], X_pca[mask, 1], 
+                   c='crimson', label='Outliers', alpha=0.8, s=100)
+        
+        variance_ratio = pca.explained_variance_ratio_
+        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
+        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
+        ax1.set_title('PCA Projection with Outliers')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: LOF scores
+        ax2 = fig.add_subplot(gs[1])
+        scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1],
+                            c=lof_scores, cmap='RdYlBu_r',
+                            s=100, alpha=0.6)
+        
+        plt.colorbar(scatter, ax=ax2, label='LOF Score')
+        ax2.set_xlabel('PC1')
+        ax2.set_ylabel('PC2')
+        ax2.set_title('LOF Score Distribution')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+
+# Note: visualize_outliers_3d remains largely the same as it's already optimized
+# for interactive visualization
     
 __all__ = ['LOFOutliersDetector']
 
@@ -407,5 +381,6 @@ if __name__ == "__main__":
     df = pd.DataFrame(X, columns=['X1', 'X2', 'X3'])
     detector = LOFOutliersDetector()
     # print(outliers)
-    outliers = detector.fit_predict(df)
+    outliers = detector.fit_predict_with_search(df)
+    # detector.fit_predict(df)
     # print(outliers)
