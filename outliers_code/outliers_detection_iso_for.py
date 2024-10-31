@@ -1,110 +1,28 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import warnings
 import psutil
-
-
-
-from sklearn.metrics import make_scorer
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import IsolationForest
-from sklearn.decomposition import PCA
-from matplotlib.collections import PathCollection
-from matplotlib.legend_handler import HandlerPathCollection
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from typing import Tuple, Optional
+from dataclasses import dataclass
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import IsolationForest
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import make_scorer
 from scipy.stats import randint, uniform
+from scipy import stats
 import warnings
 
 
-real_cpu_count = psutil.cpu_count(logical=False)
+# Use physical CPU cores for computation
+PHYSICAL_CORES = psutil.cpu_count(logical=False)
+# Use more threads for I/O bound operations
+THREAD_COUNT = psutil.cpu_count(logical=True)
 
-
-def visualize_isolation_forest(df: pd.DataFrame, anomaly_scores: np.ndarray, mask: np.ndarray) -> None:
-    """
-    Create enhanced visualizations for Isolation Forest outlier detection results.
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame containing features to detect outliers
-    anomaly_scores : numpy.ndarray
-        Anomaly scores from the model (-1 for outliers, 1 for inliers)
-    mask : numpy.ndarray
-        Boolean mask indicating outliers
-    """
-    # Create figure with subplots
-    fig = plt.figure(figsize=(15, 7))
-    gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
-
-    # Plot 1: PCA visualization with improved aesthetics
-    ax1 = fig.add_subplot(gs[0])
-    
-    # Separate outliers and inliers
-    outliers = df[mask]
-    inliers = df[~mask]
-    
-    # Apply PCA
-    pca = PCA(n_components=2)
-    X_pca = pca.fit_transform(df.values)
-    X_outliers = pca.transform(outliers.values)
-    X_inliers = pca.transform(inliers.values)
-    
-    # Create enhanced scatter plot
-    ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], 
-               c='royalblue', label='Inliers', alpha=0.6, s=50)
-    ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], 
-               c='crimson', label='Outliers', alpha=0.8, s=100)
-    
-    # Add explanatory text
-    variance_ratio = pca.explained_variance_ratio_
-    ax1.set_xlabel(f'First Principal Component\n({variance_ratio[0]:.1%} variance explained)')
-    ax1.set_ylabel(f'Second Principal Component\n({variance_ratio[1]:.1%} variance explained)')
-    ax1.set_title('PCA Projection of Data\nwith Isolation Forest Detection', pad=20)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Anomaly Score visualization
-    ax2 = fig.add_subplot(gs[1])
-    
-    # Normalize scores for visualization
-    normalized_scores = (anomaly_scores - anomaly_scores.min()) / (anomaly_scores.max() - anomaly_scores.min())
-    
-    # Create scatter plot with size proportional to anomaly score
-    scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1],
-                         c=anomaly_scores,
-                         cmap='RdYlBu_r',
-                         s=1000 * normalized_scores,
-                         alpha=0.6,
-                         label='Anomaly scores')
-    
-    # Customize the plot
-    ax2.set_title('Isolation Forest Anomaly Scores\nMarker Size ∝ Anomaly Score', pad=20)
-    ax2.set_xlabel('First Principal Component')
-    ax2.set_ylabel('Second Principal Component')
-    ax2.grid(True, alpha=0.3)
-    
-    # Add legend with custom handler
-    def update_legend_marker_size(handle, orig):
-        handle.update_from(orig)
-        handle.set_sizes([100])
-    
-    ax2.legend(handler_map={scatter: HandlerPathCollection(update_func=update_legend_marker_size)})
-    
-    # Add colorbar
-    norm = plt.Normalize(anomaly_scores.min(), anomaly_scores.max())
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.RdYlBu_r, norm=norm)
-    plt.colorbar(sm, ax=ax2, label='Anomaly Score', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.show()
-    
-    # Print statistical summary
-    print("\nIsolation Forest Detection Summary:")
-    print(f"Total points: {len(df)}")
-    print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-    print(f"Anomaly Score Range: {anomaly_scores.min():.2f} to {anomaly_scores.max():.2f}")
 
 def visualize_isolation_forest_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mask: np.ndarray) -> None:
     """
@@ -225,47 +143,73 @@ def visualize_isolation_forest_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, 
     plt.show()
 
 
-def isolation_forest_scoring(estimator, X):
-    """
-    Custom scoring function for IsolationForest.
-    Combines average path length deviation and clustering metrics.
+
+@dataclass
+class IForestParams:
+    """Dataclass to store Isolation Forest parameters"""
+    n_estimators: int
+    max_samples: float
+    max_features: float
+    contamination: float
+    bootstrap: bool
+
+def parallel_iforest_scoring(params: IForestParams, X: np.ndarray) -> Tuple[float, IForestParams]:
+    """Enhanced parallel Isolation Forest scoring with extreme value control"""
+    pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('iforest', IsolationForest(
+            n_estimators=params.n_estimators,
+            max_samples=params.max_samples,
+            max_features=params.max_features,
+            contamination=params.contamination,
+            bootstrap=params.bootstrap
+        ))
+    ])
     
-    Parameters:
-    -----------
-    estimator : Pipeline
-        The pipeline containing IsolationForest
-    X : array-like
-        The input samples
+    pipeline.fit(X)
+    scores = pipeline.named_steps['iforest'].decision_function(X)
     
-    Returns:
-    --------
-    float
-        Score value (higher is better)
-    """
-    # Get the IsolationForest from pipeline
-    iforest = estimator.named_steps['iforest']
+    # Core metrics
+    score_mean = np.mean(scores)
+    score_std = np.std(scores)
+    score_skew = np.abs(stats.skew(scores))
+    score_kurtosis = stats.kurtosis(scores)
     
-    # Get decision function scores
-    scores = iforest.decision_function(X)
+    # Extreme value analysis - now used
+    extreme_threshold = score_mean - (3 * score_std)
+    extreme_ratio = np.sum(scores < extreme_threshold) / len(scores)
+    extreme_penalty = np.exp(extreme_ratio * 5) if extreme_ratio > 0.01 else 0.5
     
-    # Calculate metrics
-    avg_path_length = np.mean([e.decision_path(X)[1].data.mean() 
-                              for e in iforest.estimators_])
-    score_std = np.std(scores)  # Higher std suggests better separation
+    # Density metrics
+    percentiles = np.percentile(scores, [0.1, 1, 5, 95, 99, 99.9])
+    density_gaps = np.diff(percentiles)
+    tail_separation = density_gaps[0] + density_gaps[-1]
+    density_score = np.mean(density_gaps[1:-1]) / (density_gaps[0] + density_gaps[-1])
     
-    # Combine metrics (normalized path length and score standard deviation)
-    # We want shorter paths (more anomalous) and higher standard deviation
-    normalized_path = 1 / (1 + avg_path_length)
-    combined_score = (normalized_path + score_std) / 2
+    # Adaptive threshold using extreme ratio
+    threshold_factor = 5.0 + score_skew + (0.1 * score_kurtosis) + (2.0 * extreme_ratio)
+    threshold_score = score_mean - (threshold_factor * score_std)
+    potential_outliers = np.sum(scores < threshold_score) / len(scores)
+    outlier_penalty = np.exp(potential_outliers * 4) if potential_outliers > 0.01 else 0.5
     
-    return combined_score
+    # Combined score with extreme ratio component
+    combined_score = (
+        0.25 * score_std +                    # Distribution spread
+        0.2 * tail_separation +              # Tail behavior
+        0.2 * (1 / (1 + score_skew)) +      # Symmetry
+        0.1 * (1 / outlier_penalty) +        # Outlier penalty
+        0.15 * density_score +                # Density separation
+        0.1 * (1 / extreme_penalty)          # Extreme value control
+    )
+    
+    # Strong contamination penalty
+    contamination_penalty = np.exp(params.contamination * 15)
+    combined_score = combined_score / contamination_penalty
+    
+    return 1 / (1 + np.exp(-combined_score)), params
+
 
 class IsolationForestDetector:
-    """
-    Enhanced Isolation Forest-based outlier detector with visualization capabilities
-    and hyperparameter search.
-    """
-    
     def __init__(
         self,
         contamination: float = 'auto',
@@ -275,24 +219,6 @@ class IsolationForestDetector:
         bootstrap: bool = False,
         random_state: Optional[int] = None
     ) -> None:
-        """
-        Initialize the Isolation Forest detector with enhanced parameters.
-        
-        Parameters:
-        -----------
-        contamination : float or 'auto', default='auto'
-            Expected proportion of outliers in the dataset
-        n_estimators : int, default=100
-            Number of base estimators in the ensemble
-        max_samples : int or str, default='auto'
-            Number of samples to draw to train each base estimator
-        max_features : float, default=1.0
-            Number of features to draw from X to train each base estimator
-        bootstrap : bool, default=False
-            Whether to use bootstrap when drawing samples
-        random_state : int or None, default=None
-            Random state for reproducibility
-        """
         self.pipeline = Pipeline([
             ('scaler', StandardScaler()),
             ('iforest', IsolationForest(
@@ -302,159 +228,156 @@ class IsolationForestDetector:
                 max_features=max_features,
                 bootstrap=bootstrap,
                 random_state=random_state,
-                n_jobs=-1
+                n_jobs=PHYSICAL_CORES
             ))
         ])
         
-        # Define parameter distributions for random search
         self.param_distributions = {
-            'iforest__n_estimators': randint(50, 200),
-            'iforest__max_samples': uniform(0.1, 0.9),  # proportion of samples
-            'iforest__max_features': uniform(0.1, 0.9),  # proportion of features
-            'iforest__contamination': uniform(0.01, 0.3),
-            'iforest__bootstrap': [True, False]
+            'n_estimators': randint(100, 300),
+            'max_samples': uniform(0.1, 0.4),
+            'max_features': uniform(0.1, 0.9),
+            'contamination': uniform(0.001, 0.1),
+            'bootstrap': [True]
         }
-        
+
+    def _generate_param_combinations(self, n_iter: int) -> list:
+        """Generate parameter combinations for parallel processing"""
+        params_list = []
+        for _ in range(n_iter):
+            params = IForestParams(
+                n_estimators=self.param_distributions['n_estimators'].rvs(),
+                max_samples=self.param_distributions['max_samples'].rvs(),
+                max_features=self.param_distributions['max_features'].rvs(),
+                contamination=self.param_distributions['contamination'].rvs(),
+                bootstrap=np.random.choice(self.param_distributions['bootstrap'])
+            )
+            params_list.append(params)
+        return params_list
+
+    def _plot(self, df, anomaly_scores):
+        if df.shape[1] > 2:
+            visualize_isolation_forest_3d(
+                df,
+                anomaly_scores,
+                self.mask
+            )
+        else:
+            visualize_isolation_forest(
+                df,
+                anomaly_scores,
+                self.mask
+            )
+
     def fit_predict_with_search(
         self,
         df: pd.DataFrame,
         plot_results: bool = True,
         n_iter: int = 20,
-        cv: int = 5,
         verbose: int = 1
     ) -> Tuple[pd.DataFrame, np.ndarray]:
-        """
-        Fit and predict outliers using Isolation Forest with RandomizedSearchCV
-        
-        Parameters:
-        -----------
-        df : pandas.DataFrame
-            DataFrame containing features to detect outliers
-        plot_results : bool, default=True
-            Whether to visualize the results
-        n_iter : int, default=20
-            Number of iterations for RandomizedSearchCV
-        cv : int, default=5
-            Number of cross-validation folds
-        verbose : int, default=1
-            Verbosity level
-            
-        Returns:
-        --------
-        Tuple[pandas.DataFrame, numpy.ndarray]
-            DataFrame containing outliers and array of anomaly scores
-        """
+        """Optimized parallel parameter search"""
         X = df.values
-        warnings.filterwarnings("ignore")
+        params_list = self._generate_param_combinations(n_iter)
         
-        # Initialize and run randomized search
-        search = RandomizedSearchCV(
-            self.pipeline,
-            self.param_distributions,
-            n_iter=n_iter,
-            cv=cv,
-            n_jobs=int(real_cpu_count *0.2),
-            verbose=verbose,
-            scoring=make_scorer(isolation_forest_scoring)
+        with ProcessPoolExecutor(max_workers=PHYSICAL_CORES) as executor:
+            results = list(executor.map(
+                partial(parallel_iforest_scoring, X=X),
+                params_list
+            ))
+        
+        best_score, best_params = max(results, key=lambda x: x[0])
+        
+        self.pipeline.named_steps['iforest'].set_params(
+            n_estimators=best_params.n_estimators,
+            max_samples=best_params.max_samples,
+            max_features=best_params.max_features,
+            contamination=best_params.contamination,
+            bootstrap=best_params.bootstrap
         )
         
-        search.fit(X)
-        
-        # Print best parameters and score
-        print("\nBest parameters found:")
-        for param, value in search.best_params_.items():
-            print(f"{param}: {value}")
-        print(f"Best cross-validation score: {search.best_score_:.3f}")
-        
-        # Use best estimator for predictions
-        best_estimator = search.best_estimator_
-        predictions = best_estimator.predict(X)
+        predictions = self.pipeline.fit_predict(X)
         self.mask = predictions == -1
+        anomaly_scores = -self.pipeline.named_steps['iforest'].decision_function(X)
         
-        # Get anomaly scores
-        anomaly_scores = -best_estimator.named_steps['iforest'].decision_function(X)
-        
-        # Update pipeline with best estimator
-        self.pipeline = best_estimator
-        
-        # Visualize results if requested
-        if plot_results and df.shape[1] > 2:
-            visualize_isolation_forest_3d(df, anomaly_scores, self.mask)
-        elif plot_results:
-            visualize_isolation_forest(df, anomaly_scores, self.mask)
-        
-        warnings.filterwarnings("default")
+        if plot_results:
+            print(f"\nBest parameters found:")
+            print(f"n_estimators: {best_params.n_estimators}")
+            print(f"max_samples: {best_params.max_samples:.3f}")
+            print(f"max_features: {best_params.max_features:.3f}")
+            print(f"contamination: {best_params.contamination:.3f}")
+            print(f"bootstrap: {best_params.bootstrap}")
+            print(f"Best score: {best_score:.4f}")
+            self._plot(df, anomaly_scores)
         
         return df[self.mask], anomaly_scores
-    
+
     def fit_predict(
         self,
         df: pd.DataFrame,
         plot_results: bool = True
     ) -> Tuple[pd.DataFrame, np.ndarray]:
-        """
-        Fit the model and predict outliers using Isolation Forest.
-        
-        Parameters:
-        -----------
-        df : pandas.DataFrame
-            DataFrame containing features to detect outliers
-        plot_results : bool, default=True
-            Whether to visualize the results
-            
-        Returns:
-        --------
-        Tuple[pandas.DataFrame, numpy.ndarray]
-            DataFrame containing outliers and array of anomaly scores
-        """
-        # Fit and predict
+        """Optimized basic fit and predict"""
         X = df.values
         predictions = self.pipeline.fit_predict(X)
         self.mask = predictions == -1
-        
-        # Get anomaly scores (negative of decision function for consistency with LOF)
         anomaly_scores = -self.pipeline.named_steps['iforest'].decision_function(X)
         
-        # Visualize results if requested
-        if plot_results and df.shape[1] > 2:
-            visualize_isolation_forest_3d(df, anomaly_scores, self.mask)
-        elif plot_results:
-            visualize_isolation_forest(df, anomaly_scores, self.mask)
+        if plot_results:
+            self._plot(df, anomaly_scores)
         
         return df[self.mask], anomaly_scores
-    
 
-    
-    def get_search_results_summary(self, search_cv: RandomizedSearchCV) -> pd.DataFrame:
-        """
-        Get a summary of all trials from the hyperparameter search.
+# Optimize visualization functions (similar to previous implementation)
+def visualize_isolation_forest(df: pd.DataFrame, anomaly_scores: np.ndarray, mask: np.ndarray,
+                             fig_size: Tuple[int, int] = (15, 7)) -> None:
+    """Optimized 2D visualization"""
+    with plt.style.context('seaborn-v0_8-whitegrid'):
+        fig = plt.figure(figsize=fig_size)
+        gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
         
-        Parameters:
-        -----------
-        search_cv : RandomizedSearchCV
-            Completed RandomizedSearchCV object
-            
-        Returns:
-        --------
-        pandas.DataFrame
-            Summary of all trials sorted by score
-        """
-        # Extract results
-        results = []
-        for params, score, rank in zip(
-            search_cv.cv_results_['params'],
-            search_cv.cv_results_['mean_test_score'],
-            search_cv.cv_results_['rank_test_score']
-        ):
-            results.append({
-                'rank': rank,
-                'score': score,
-                **{k.split('__')[1]: v for k, v in params.items()}
-            })
+        # Perform PCA once and reuse results
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(df.values)
         
-        # Convert to DataFrame and sort by score
-        results_df = pd.DataFrame(results).sort_values('score', ascending=False)
-        return results_df
-    
+        # Plot 1: PCA visualization
+        ax1 = fig.add_subplot(gs[0])
+        ax1.scatter(X_pca[~mask, 0], X_pca[~mask, 1],
+                   c='royalblue', label='Inliers', alpha=0.6, s=50)
+        ax1.scatter(X_pca[mask, 0], X_pca[mask, 1],
+                   c='crimson', label='Outliers', alpha=0.8, s=100)
+        
+        variance_ratio = pca.explained_variance_ratio_
+        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
+        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
+        ax1.set_title('PCA Projection with Isolation Forest')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Anomaly scores
+        ax2 = fig.add_subplot(gs[1])
+        scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1],
+                            c=anomaly_scores, cmap='RdYlBu_r',
+                            s=100, alpha=0.6)
+        
+        plt.colorbar(scatter, ax=ax2, label='Anomaly Score')
+        ax2.set_xlabel('PC1')
+        ax2.set_ylabel('PC2')
+        ax2.set_title('Anomaly Score Distribution')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
 
 __all__ = ['IsolationForestDetector']
+
+
+if __name__ == "__main__":
+    # Test the LOFOutliersDetector class
+    from sklearn.datasets import make_blobs
+    X, y = make_blobs(n_samples=1000, centers=1, n_features=3, random_state=42)
+    df = pd.DataFrame(X, columns=['X1', 'X2', 'X3'])
+    detector = IsolationForestDetector()
+    # print(outliers)
+    outliers = detector.fit_predict_with_search(df)
+    # detector.fit_predict(df)
+    # print(outliers)
