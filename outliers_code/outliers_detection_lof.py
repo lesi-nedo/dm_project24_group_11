@@ -368,8 +368,14 @@ def visualize_outliers(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.ndarra
         plt.tight_layout()
         plt.show()
 
-# Note: visualize_outliers_3d remains largely the same as it's already optimized
-# for interactive visualization
+        print("\n3D Outlier Detection Summary:")
+        print(f"Total points: {len(df)}")
+        print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
+        print(f"LOF Score Range: {lof_scores.min():.2f} to {lof_scores.max():.2f}")
+        print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
+        print("\nInteractive Controls:")
+
+
     
 __all__ = ['LOFOutliersDetector']
 

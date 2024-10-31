@@ -368,6 +368,12 @@ def visualize_isolation_forest(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         plt.tight_layout()
         plt.show()
 
+        print(f"Total points: {len(df)}")
+        print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
+        print(f"Anomaly Score Range: {anomaly_scores.min():.2f} to {anomaly_scores.max():.2f}")
+        print(f"Variance explained by 2 PCs: {sum(variance_ratio):.1%}")
+
+
 __all__ = ['IsolationForestDetector']
 
 
