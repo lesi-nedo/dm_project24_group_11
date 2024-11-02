@@ -37,110 +37,103 @@ def visualize_isolation_forest_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, 
     mask : numpy.ndarray
         Boolean mask indicating outliers
     """
-    plt.style.use('seaborn-v0_8-whitegrid')
-    
-    # Create figure with subplots
-    fig = plt.figure(figsize=(20, 8))
-    
-    # Separate outliers and inliers
-    outliers = df[mask]
-    inliers = df[~mask]
-    
-    # Apply PCA
-    pca = PCA(n_components=3)
-    X_pca = pca.fit_transform(df.values)
-    X_outliers = pca.transform(outliers.values)
-    X_inliers = pca.transform(inliers.values)
-    
-    # Plot 1: 3D PCA visualization
-    ax1 = fig.add_subplot(121, projection='3d')
-    
-    # Plot inliers and outliers
-    ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
-                c='royalblue', label='Inliers', alpha=0.6, s=50)
-    ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
-                c='crimson', label='Outliers', alpha=0.8, s=100)
-    
-    # Customize the plot
-    variance_ratio = pca.explained_variance_ratio_
-    ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
-    ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
-    ax1.set_zlabel(f'PC3 ({variance_ratio[2]:.1%} var)')
-    ax1.set_title('3D PCA Projection with Isolation Forest', pad=20)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: 3D Anomaly Score visualization
-    ax2 = fig.add_subplot(122, projection='3d')
-    
-    # Create scatter plot with color based on anomaly scores
-    scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1], X_pca[:, 2],
-                         c=anomaly_scores,
-                         cmap='RdYlBu_r',
-                         s=100,
-                         alpha=0.6)
-    
-    # Add spheres for high anomaly scores
-    high_anomaly_mask = anomaly_scores < np.percentile(anomaly_scores, 10)  # Top 10% most anomalous
-    if np.any(high_anomaly_mask):
-        ax2.scatter(X_pca[high_anomaly_mask, 0],
-                   X_pca[high_anomaly_mask, 1],
-                   X_pca[high_anomaly_mask, 2],
-                   s=200,
-                   facecolors='none',
-                   edgecolors='red',
-                   alpha=0.5,
-                   label='High Anomaly Score')
-    
-    # Customize the plot
-    ax2.set_xlabel('PC1')
-    ax2.set_ylabel('PC2')
-    ax2.set_zlabel('PC3')
-    ax2.set_title('3D Anomaly Score Distribution', pad=20)
-    ax2.grid(True, alpha=0.3)
-    
-    # Add colorbar
-    plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
-    
-    # Add rotation controls
-    def rotate(angle):
-        ax1.view_init(azim=angle)
-        ax2.view_init(azim=angle)
-        plt.draw()
-    
-    def on_key_press(event):
-        if event.key == 'left':
-            rotate(ax1.azim - 5)
-        elif event.key == 'right':
-            rotate(ax1.azim + 5)
-        elif event.key == 'up':
-            ax1.view_init(elev=ax1.elev + 5)
-            ax2.view_init(elev=ax2.elev + 5)
+    with plt.style.context('seaborn-v0_8-whitegrid'):
+
+        # Create figure with subplots
+        fig = plt.figure(figsize=(20, 8), constrained_layout=True)
+        
+        # Separate outliers and inliers
+        outliers = df[mask]
+        inliers = df[~mask]
+        
+        # Apply PCA
+        pca = PCA(n_components=3)
+        X_pca = pca.fit_transform(df.values)
+        X_outliers = pca.transform(outliers.values)
+        X_inliers = pca.transform(inliers.values)
+        
+        # Plot 1: 3D PCA visualization
+        ax1 = fig.add_subplot(121, projection='3d')
+        
+        # Plot inliers and outliers
+        ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
+                    c='royalblue', label='Inliers', alpha=0.6, s=50)
+        ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
+                    c='crimson', label='Outliers', alpha=0.8, s=100)
+        
+        # Customize the plot
+        variance_ratio = pca.explained_variance_ratio_
+        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
+        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
+        ax1.set_zlabel(f'PC3 ({variance_ratio[2]:.1%} var)')
+        ax1.set_title('3D PCA Projection with Isolation Forest', pad=20)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: 3D Anomaly Score visualization
+        ax2 = fig.add_subplot(122, projection='3d')
+        
+        # Create scatter plot with color based on anomaly scores
+        scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1], X_pca[:, 2],
+                            c=anomaly_scores,
+                            cmap='RdYlBu_r',
+                            s=100,
+                            alpha=0.6)
+        
+        # Add spheres for high anomaly scores
+        high_anomaly_mask = anomaly_scores < np.percentile(anomaly_scores, 10)  # Top 10% most anomalous
+        if np.any(high_anomaly_mask):
+            ax2.scatter(X_pca[high_anomaly_mask, 0],
+                    X_pca[high_anomaly_mask, 1],
+                    X_pca[high_anomaly_mask, 2],
+                    s=200,
+                    facecolors='none',
+                    edgecolors='red',
+                    alpha=0.5,
+                    label='High Anomaly Score')
+        
+        # Customize the plot
+        ax2.set_xlabel('PC1')
+        ax2.set_ylabel('PC2')
+        ax2.set_zlabel('PC3')
+        ax2.set_title('3D Anomaly Score Distribution', pad=20)
+        ax2.grid(True, alpha=0.3)
+        
+        # Add colorbar
+        plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
+        
+        # Add rotation controls
+        def rotate(angle):
+            ax1.view_init(azim=angle)
+            ax2.view_init(azim=angle)
             plt.draw()
-        elif event.key == 'down':
-            ax1.view_init(elev=ax1.elev - 5)
-            ax2.view_init(elev=ax2.elev - 5)
-            plt.draw()
-    
-    fig.canvas.mpl_connect('key_press_event', on_key_press)
-    
-    # Set initial view angle
-    ax1.view_init(elev=20, azim=45)
-    ax2.view_init(elev=20, azim=45)
-    
-    plt.tight_layout()
-    
-    # Print summary statistics
-    print("\n3D Isolation Forest Detection Summary:")
-    print(f"Total points: {len(df)}")
-    print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-    print(f"Anomaly Score Range: {anomaly_scores.min():.2f} to {anomaly_scores.max():.2f}")
-    print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
-    print("\nInteractive Controls:")
-    print("- Use arrow keys to rotate and tilt the plots")
-    print("- Close the plot window to exit")
-    
-    plt.show()
+        
+        def on_key_press(event):
+            if event.key == 'left':
+                rotate(ax1.azim - 5)
+            elif event.key == 'right':
+                rotate(ax1.azim + 5)
+            elif event.key == 'up':
+                ax1.view_init(elev=ax1.elev + 5)
+                ax2.view_init(elev=ax2.elev + 5)
+                plt.draw()
+            elif event.key == 'down':
+                ax1.view_init(elev=ax1.elev - 5)
+                ax2.view_init(elev=ax2.elev - 5)
+                plt.draw()
+        
+        fig.canvas.mpl_connect('key_press_event', on_key_press)
+        
+        # Set initial view angle
+        ax1.view_init(elev=20, azim=45)
+        ax2.view_init(elev=20, azim=45)
+        
+        print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
+        print("\nInteractive Controls:")
+        print("- Use arrow keys to rotate and tilt the plots")
+        print("- Close the plot window to exit")
+        
+        plt.show()
 
 
 
@@ -267,6 +260,49 @@ class IsolationForestDetector:
                 anomaly_scores,
                 self.mask
             )
+    def _print_results(self, df: pd.DataFrame, best_params: dict, best_score: float, anomaly_scores: np.ndarray):
+        """Print formatted results of Isolation Forest detection."""
+        print("\n" + "="*50)
+        print("Isolation Forest Detection Results")
+        print("="*50)
+        
+        # Model Configuration
+        print("\nBest Parameters:")
+        print(f"  n_estimators:      {best_params['n_estimators']}")
+        print(f"  max_samples:       {best_params['max_samples']}")
+        print(f"  contamination:     {best_params['contamination']}")
+        print(f"  max_features:      {best_params['max_features']}")
+        print(f"  bootstrap:         {best_params['bootstrap']}")
+        print(f"  Score:            {best_score:.4f}")
+        
+        # Handle 'auto' contamination by using a default value of 0.1
+        contamination = 0.1 if best_params['contamination'] == 'auto' else float(best_params['contamination'])
+        
+        # Calculate outlier mask using provided contamination
+        threshold = np.percentile(anomaly_scores, 100 * (1 - contamination))
+        mask = anomaly_scores > threshold
+        
+        # Detection Statistics
+        n_outliers = mask.sum()
+        outlier_ratio = n_outliers/len(df)
+        print("\nDetection Statistics:")
+        print(f"  Total points:      {len(df):,}")
+        print(f"  Outliers found:    {n_outliers:,} ({outlier_ratio:.1%})")
+        print(f"  Inliers retained:  {len(df)-n_outliers:,} ({1-outlier_ratio:.1%})")
+        print(f"  Contamination:     {contamination:.1%}")
+        
+        # Score Distribution
+        print("\nIsolation Forest Score Distribution:")
+        print(f"  Min score:     {anomaly_scores.min():.2f}")
+        print(f"  Max score:     {anomaly_scores.max():.2f}")
+        print(f"  Mean score:    {np.mean(anomaly_scores):.2f}")
+        print(f"  Median score:  {np.median(anomaly_scores):.2f}")
+        
+        # Percentiles 
+        percentiles = np.percentile(anomaly_scores, [25, 75, 90, 95, 99])
+        print("\nScore Percentiles:")
+        print(f"  25th: {percentiles[0]:.2f}")
+        print(f"  75th: {percentiles[1]:.2f}")
 
     def fit_predict_with_search(
         self,
@@ -300,13 +336,7 @@ class IsolationForestDetector:
         anomaly_scores = -self.pipeline.named_steps['iforest'].decision_function(X)
         
         if plot_results:
-            print(f"\nBest parameters found:")
-            print(f"n_estimators: {best_params.n_estimators}")
-            print(f"max_samples: {best_params.max_samples:.3f}")
-            print(f"max_features: {best_params.max_features:.3f}")
-            print(f"contamination: {best_params.contamination:.3f}")
-            print(f"bootstrap: {best_params.bootstrap}")
-            print(f"Best score: {best_score:.4f}")
+            self._print_results(df, best_params.__dict__, best_score, anomaly_scores)
             self._plot(df, anomaly_scores)
         
         return df[self.mask], anomaly_scores
@@ -323,6 +353,7 @@ class IsolationForestDetector:
         anomaly_scores = -self.pipeline.named_steps['iforest'].decision_function(X)
         
         if plot_results:
+            self._print_results(df, self.pipeline.named_steps['iforest'].get_params(), 0.0, anomaly_scores)
             self._plot(df, anomaly_scores)
         
         return df[self.mask], anomaly_scores
@@ -332,7 +363,8 @@ def visualize_isolation_forest(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
                              fig_size: Tuple[int, int] = (15, 7)) -> None:
     """Optimized 2D visualization"""
     with plt.style.context('seaborn-v0_8-whitegrid'):
-        fig = plt.figure(figsize=fig_size)
+        fig = plt.figure(figsize=fig_size, constrained_layout=True)
+
         gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
         
         # Perform PCA once and reuse results
@@ -365,13 +397,10 @@ def visualize_isolation_forest(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         ax2.set_title('Anomaly Score Distribution')
         ax2.grid(True, alpha=0.3)
         
-        plt.tight_layout()
         plt.show()
 
-        print(f"Total points: {len(df)}")
-        print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-        print(f"Anomaly Score Range: {anomaly_scores.min():.2f} to {anomaly_scores.max():.2f}")
-        print(f"Variance explained by 2 PCs: {sum(variance_ratio):.1%}")
+        print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
+
 
 
 __all__ = ['IsolationForestDetector']
