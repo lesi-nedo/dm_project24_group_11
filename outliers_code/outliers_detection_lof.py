@@ -38,124 +38,119 @@ def visualize_outliers_3d(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.nda
         Boolean mask indicating outliers
     """
     # Set the style
-    plt.style.use('seaborn-v0_8-whitegrid')
+    with plt.style.context('seaborn-v0_8-whitegrid'):
     
-    # Create figure with subplots
-    fig = plt.figure(figsize=(20, 8))
-    
-    # Separate outliers and inliers
-    outliers = df[mask]
-    inliers = df[~mask]
-    
-    # Apply PCA with 3 components
-    pca = PCA(n_components=3)
-    X = df.values
-    X_pca = pca.fit_transform(X)
-    X_outliers = pca.transform(outliers.values)
-    X_inliers = pca.transform(inliers.values)
-    
-    # Plot 1: 3D PCA visualization
-    ax1 = fig.add_subplot(121, projection='3d')
-    
-    # Plot inliers
-    scatter1 = ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
-                          c='royalblue', label='Inliers', alpha=0.6, s=50)
-    
-    # Plot outliers
-    scatter2 = ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
-                          c='crimson', label='Outliers', alpha=0.8, s=100)
-    
-    # Customize the plot
-    variance_ratio = pca.explained_variance_ratio_
-    ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
-    ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
-    ax1.set_zlabel(f'PC3 ({variance_ratio[2]:.1%} var)')
-    ax1.set_title('3D PCA Projection with Outliers', pad=20)
-    ax1.legend()
-    
-    # Add grid
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: 3D LOF visualization
-    ax2 = fig.add_subplot(122, projection='3d')
-    
-    # Create color mapping based on LOF scores
-    norm = plt.Normalize(lof_scores.min(), lof_scores.max())
-    colors = plt.cm.RdYlBu_r(norm(lof_scores))
-    
-    # Plot points with color based on LOF score
-    scatter3 = ax2.scatter(X_pca[:, 0], X_pca[:, 1], X_pca[:, 2],
-                          c=lof_scores,
-                          cmap='RdYlBu_r',
-                          s=100,
-                          alpha=0.6)
-    
-    # Add spheres for high LOF scores
-    high_lof_mask = lof_scores > np.percentile(lof_scores, 90)  # Top 10% of LOF scores
-    if np.any(high_lof_mask):
-        ax2.scatter(X_pca[high_lof_mask, 0],
-                   X_pca[high_lof_mask, 1],
-                   X_pca[high_lof_mask, 2],
-                   s=200,
-                   facecolors='none',
-                   edgecolors='red',
-                   alpha=0.5,
-                   label='High LOF Score')
-    
-    # Customize the plot
-    ax2.set_xlabel('PC1')
-    ax2.set_ylabel('PC2')
-    ax2.set_zlabel('PC3')
-    ax2.set_title('3D LOF Score Distribution', pad=20)
-    
-    # Add colorbar
-    plt.colorbar(scatter3, ax=ax2, label='LOF Score', alpha=0.7)
-    
-    # Add grid
-    ax2.grid(True, alpha=0.3)
-    
-    # Add rotation animation
-    def rotate(angle):
-        ax1.view_init(azim=angle)
-        ax2.view_init(azim=angle)
-        plt.draw()
-    
-    # Function to update the view angle
-    def on_key_press(event):
-        if event.key == 'left':
-            rotate(ax1.azim - 5)
-        elif event.key == 'right':
-            rotate(ax1.azim + 5)
-        elif event.key == 'up':
-            ax1.view_init(elev=ax1.elev + 5)
-            ax2.view_init(elev=ax2.elev + 5)
+        print("\nInteractive Controls:")
+        print("- Use arrow keys to rotate and tilt the plots")
+        print("- Close the plot window to exit")
+        
+        # Create figure with subplots
+        fig = plt.figure(figsize=(20, 8), constrained_layout=True)
+        
+        # Separate outliers and inliers
+        outliers = df[mask]
+        inliers = df[~mask]
+        
+        # Apply PCA with 3 components
+        pca = PCA(n_components=3)
+        X = df.values
+        X_pca = pca.fit_transform(X)
+        X_outliers = pca.transform(outliers.values)
+        X_inliers = pca.transform(inliers.values)
+        
+        # Plot 1: 3D PCA visualization
+        ax1 = fig.add_subplot(121, projection='3d')
+        
+        # Plot inliers
+        scatter1 = ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
+                            c='royalblue', label='Inliers', alpha=0.6, s=50)
+        
+        # Plot outliers
+        scatter2 = ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
+                            c='crimson', label='Outliers', alpha=0.8, s=100)
+        
+        # Customize the plot
+        variance_ratio = pca.explained_variance_ratio_
+        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
+        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
+        ax1.set_zlabel(f'PC3 ({variance_ratio[2]:.1%} var)')
+        ax1.set_title('3D PCA Projection with Outliers', pad=20)
+        ax1.legend()
+        
+        # Add grid
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: 3D LOF visualization
+        ax2 = fig.add_subplot(122, projection='3d')
+        
+        # Create color mapping based on LOF scores
+        norm = plt.Normalize(lof_scores.min(), lof_scores.max())
+        colors = plt.cm.RdYlBu_r(norm(lof_scores))
+        
+        # Plot points with color based on LOF score
+        scatter3 = ax2.scatter(X_pca[:, 0], X_pca[:, 1], X_pca[:, 2],
+                            c=lof_scores,
+                            cmap='RdYlBu_r',
+                            s=100,
+                            alpha=0.6)
+        
+        # Add spheres for high LOF scores
+        high_lof_mask = lof_scores > np.percentile(lof_scores, 90)  # Top 10% of LOF scores
+        if np.any(high_lof_mask):
+            ax2.scatter(X_pca[high_lof_mask, 0],
+                    X_pca[high_lof_mask, 1],
+                    X_pca[high_lof_mask, 2],
+                    s=200,
+                    facecolors='none',
+                    edgecolors='red',
+                    alpha=0.5,
+                    label='High LOF Score')
+        
+        # Customize the plot
+        ax2.set_xlabel('PC1')
+        ax2.set_ylabel('PC2')
+        ax2.set_zlabel('PC3')
+        ax2.set_title('3D LOF Score Distribution', pad=20)
+        
+        # Add colorbar
+        plt.colorbar(scatter3, ax=ax2, label='LOF Score', alpha=0.7)
+        
+        # Add grid
+        ax2.grid(True, alpha=0.3)
+        
+        # Add rotation animation
+        def rotate(angle):
+            ax1.view_init(azim=angle)
+            ax2.view_init(azim=angle)
             plt.draw()
-        elif event.key == 'down':
-            ax1.view_init(elev=ax1.elev - 5)
-            ax2.view_init(elev=ax2.elev - 5)
-            plt.draw()
+        
+        # Function to update the view angle
+        def on_key_press(event):
+            if event.key == 'left':
+                rotate(ax1.azim - 5)
+            elif event.key == 'right':
+                rotate(ax1.azim + 5)
+            elif event.key == 'up':
+                ax1.view_init(elev=ax1.elev + 5)
+                ax2.view_init(elev=ax2.elev + 5)
+                plt.draw()
+            elif event.key == 'down':
+                ax1.view_init(elev=ax1.elev - 5)
+                ax2.view_init(elev=ax2.elev - 5)
+                plt.draw()
+        
+        # Connect the key press event
+        fig.canvas.mpl_connect('key_press_event', on_key_press)
+        
+        # Set initial view angle
+        ax1.view_init(elev=20, azim=45)
+        ax2.view_init(elev=20, azim=45)
+        
+        print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
+
     
-    # Connect the key press event
-    fig.canvas.mpl_connect('key_press_event', on_key_press)
-    
-    # Set initial view angle
-    ax1.view_init(elev=20, azim=45)
-    ax2.view_init(elev=20, azim=45)
-    
-    # Adjust layout
-    plt.tight_layout()
-    
-    # Print summary statistics
-    print("\n3D Outlier Detection Summary:")
-    print(f"Total points: {len(df)}")
-    print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-    print(f"LOF Score Range: {lof_scores.min():.2f} to {lof_scores.max():.2f}")
-    print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
-    print("\nInteractive Controls:")
-    print("- Use arrow keys to rotate and tilt the plots")
-    print("- Close the plot window to exit")
-    
-    plt.show()
+        
+        plt.show()
 
 
 # Use physical CPU cores for heavy computation
@@ -171,6 +166,17 @@ class LOFParams:
     leaf_size: int
     p: int
     metric: str
+
+    def to_dict(self) -> dict:
+        """Convert dataclass to dictionary"""
+        result = {
+            'n_neighbors': self.n_neighbors,
+            'contamination': self.contamination,
+            'leaf_size': self.leaf_size,
+            'p': self.p,
+            'metric': self.metric
+        }
+        return result
 
 def parallel_lof_scoring(params: LOFParams, X: np.ndarray) -> Tuple[float, LOFParams]:
     """Enhanced parallel version of LOF scoring with better metrics"""
@@ -304,11 +310,21 @@ class LOFOutliersDetector:
         # Final fit and predict
         outliers = self.pipeline.fit_predict(X)
         self.mask = outliers == -1
+        # LOFParams to di
+        if plot_results:
+            self._print_results(df, best_params.to_dict(), best_score, initial_scores)
+            self._plot(df)
+        
+        return df[self.mask]
+    
+    def fit_predict(self, df: pd.DataFrame, plot_results: bool = True) -> pd.DataFrame:
+        """Fit and predict outliers with LOF"""
+        X = df.values
+        outliers = self.pipeline.fit_predict(X)
+        self.mask = outliers == -1
         
         if plot_results:
-            print(f"Best parameters: {best_params}")
-            print(f"Adaptive contamination: {adaptive_contamination:.3f}")
-            print(f"Best score: {best_score:.4f}")
+            self._print_results(df, self.pipeline.named_steps['lof'].get_params(), 0, self.pipeline.named_steps['lof'].negative_outlier_factor_)
             self._plot(df)
         
         return df[self.mask]
@@ -327,12 +343,63 @@ class LOFOutliersDetector:
                 self.mask
             )
 
+    def _print_results(self, df: pd.DataFrame, best_params: dict, best_score: float, anomaly_scores: np.ndarray):
+        """Print formatted results of LOF detection."""
+        print("\n" + "="*50)
+        print("Local Outlier Factor (LOF) Detection Results")
+        print("="*50)
+        
+        # Model Configuration
+        print("\nBest Parameters:")
+        print(f"  n_neighbors:  {best_params['n_neighbors']}")
+        print(f"  leaf_size:    {best_params['leaf_size']}")
+        print(f"  metric:       {best_params['metric']}")
+        print(f"  p:            {best_params['p']}")
+        print(f"  Score:        {best_score:.4f}")
+        
+        # Calculate outlier mask using adaptive contamination
+        contamination = self._adaptive_contamination(anomaly_scores)
+        threshold = np.percentile(anomaly_scores, 100 * (1 - contamination))
+        mask = anomaly_scores > threshold
+        
+        # Detection Statistics
+        n_outliers = mask.sum()
+        outlier_ratio = n_outliers/len(df)
+        print("\nDetection Statistics:")
+        print(f"  Total points:      {len(df):,}")
+        print(f"  Outliers found:    {n_outliers:,} ({outlier_ratio:.1%})")
+        print(f"  Inliers retained:  {len(df)-n_outliers:,} ({1-outlier_ratio:.1%})")
+        print(f"  Contamination:     {contamination:.1%}")
+        
+        # Score Distribution
+        print("\nLOF Score Distribution:")
+        print(f"  Min score:     {anomaly_scores.min():.2f}")
+        print(f"  Max score:     {anomaly_scores.max():.2f}")
+        print(f"  Mean score:    {np.mean(anomaly_scores):.2f}")
+        print(f"  Median score:  {np.median(anomaly_scores):.2f}")
+        
+        # Percentiles
+        percentiles = np.percentile(anomaly_scores, [25, 75, 90, 95, 99])
+        print("\nScore Percentiles:")
+        print(f"  25th: {percentiles[0]:.2f}")
+        print(f"  75th: {percentiles[1]:.2f}")
+        print(f"  90th: {percentiles[2]:.2f}")
+        print(f"  95th: {percentiles[3]:.2f}")
+        print(f"  99th: {percentiles[4]:.2f}")
+        
+        print("\nVisualization Controls:")
+        print("  - Use mouse to rotate 3D plots")
+        print("  - Scroll to zoom in/out")
+        print("  - Right-click and drag to pan")
+        print("="*50 + "\n")
+
+
 # Optimize visualization functions
 def visualize_outliers(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.ndarray,
                       fig_size: Tuple[int, int] = (15, 7)) -> None:
     """Optimized 2D visualization"""
     with plt.style.context('seaborn-v0_8-whitegrid'):  # Use context manager for style
-        fig = plt.figure(figsize=fig_size)
+        fig = plt.figure(figsize=fig_size,  constrained_layout=True)
         gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
         
         # Perform PCA once and reuse results
@@ -364,16 +431,10 @@ def visualize_outliers(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.ndarra
         ax2.set_ylabel('PC2')
         ax2.set_title('LOF Score Distribution')
         ax2.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
+        print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
+
         plt.show()
 
-        print("\n3D Outlier Detection Summary:")
-        print(f"Total points: {len(df)}")
-        print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-        print(f"LOF Score Range: {lof_scores.min():.2f} to {lof_scores.max():.2f}")
-        print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
-        print("\nInteractive Controls:")
 
 
     
@@ -388,5 +449,5 @@ if __name__ == "__main__":
     detector = LOFOutliersDetector()
     # print(outliers)
     outliers = detector.fit_predict_with_search(df)
-    # detector.fit_predict(df)
+    detector.fit_predict(df)
     # print(outliers)

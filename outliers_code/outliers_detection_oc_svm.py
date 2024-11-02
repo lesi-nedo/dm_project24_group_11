@@ -4,15 +4,14 @@ import matplotlib.pyplot as plt
 import psutil
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-from typing import Tuple, Optional
+from typing import Tuple
 from dataclasses import dataclass
 from sklearn.pipeline import Pipeline
 from sklearn.svm import OneClassSVM
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from matplotlib.legend_handler import HandlerPathCollection
-from scipy.stats import randint, uniform, loguniform, skew, kurtosis
-import warnings
+from scipy.stats import uniform, loguniform, skew, kurtosis
 
 # Number of physical CPU cores
 PHYSICAL_CORES = psutil.cpu_count(logical=False)
@@ -35,79 +34,121 @@ def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
     mask : numpy.ndarray
         Boolean mask indicating outliers
     """
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig = plt.figure(figsize=(20, 8))
-    gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
+    with plt.style.context('seaborn-v0_8-whitegrid'):
+        fig = plt.figure(figsize=(20, 8), constrained_layout=True)
+        gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
+        
+        # Separate outliers and inliers
+        outliers = df[mask]
+        inliers = df[~mask]
+        
+        # Apply PCA with 3 components
+        pca = PCA(n_components=3)
+        X_pca = pca.fit_transform(df.values)
+        X_outliers = pca.transform(outliers.values)
+        X_inliers = pca.transform(inliers.values)
+        
+        # Plot 1: 3D PCA visualization
+        ax1 = fig.add_subplot(gs[0], projection='3d')
+        ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
+                    c='royalblue', label='Inliers', alpha=0.6, s=50)
+        ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
+                    c='crimson', label='Outliers', alpha=0.8, s=100)
+        
+        variance_ratio = pca.explained_variance_ratio_
+        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
+        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
+        ax1.set_zlabel(f'PC3 ({variance_ratio[2]:.1%} var)')
+        ax1.set_title('3D PCA Projection with OneClassSVM', pad=20)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: 3D Anomaly Score visualization
+        ax2 = fig.add_subplot(gs[1], projection='3d')
+        scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1], X_pca[:, 2],
+                            c=anomaly_scores,
+                            cmap='RdYlBu_r',
+                            s=100,
+                            alpha=0.6)
+        
+        # Highlight high anomaly scores
+        high_anomaly_mask = anomaly_scores > np.percentile(anomaly_scores, 90)
+        if np.any(high_anomaly_mask):
+            ax2.scatter(X_pca[high_anomaly_mask, 0],
+                    X_pca[high_anomaly_mask, 1],
+                    X_pca[high_anomaly_mask, 2],
+                    s=200,
+                    facecolors='none',
+                    edgecolors='red',
+                    alpha=0.5,
+                    label='High Anomaly Score')
+        
+        ax2.set_xlabel('PC1')
+        ax2.set_ylabel('PC2')
+        ax2.set_zlabel('PC3')
+        ax2.set_title('3D Anomaly Score Distribution', pad=20)
+        ax2.grid(True, alpha=0.3)
+        
+        # Add colorbar
+        plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
+        
+        # Add legend with custom handler
+        ax2.legend(handler_map={scatter: HandlerPathCollection(update_func=update_legend_marker_size)})
+        
+        plt.show()
+        
+        # Print summary statistics
+        print(f"Variance explained by 3 PCs: {variance_ratio.sum():.1%}")
+        print("\nInteractive Controls:")
+        print("- Use arrow keys to rotate and tilt the plots")
+        print("- Close the plot window to exit")
+
+def visualize_outliers_2d(
+    df: pd.DataFrame,
+    anomaly_scores: np.ndarray,
+    mask: np.ndarray,
+    fig_size: Tuple[int, int] = (15, 7)
+) -> None:
+    """Optimized 2D visualization of outliers"""
+    with plt.style.context('seaborn-v0_8-whitegrid'):
+        fig = plt.figure(figsize=fig_size, constrained_layout=True)
+        gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
+        
+        # Perform PCA once
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(df.values)
+        
+        # Plot 1: PCA projection
+        ax1 = fig.add_subplot(gs[0])
+        ax1.scatter(X_pca[~mask, 0], X_pca[~mask, 1],
+                   c='royalblue', label='Inliers', alpha=0.6, s=50)
+        ax1.scatter(X_pca[mask, 0], X_pca[mask, 1],
+                   c='crimson', label='Outliers', alpha=0.8, s=100)
+        
+        variance_ratio = pca.explained_variance_ratio_
+        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
+        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
+        ax1.set_title('OneClassSVM Outlier Detection')
+        ax1.legend()
+        
+        # Plot 2: Decision scores
+        ax2 = fig.add_subplot(gs[1])
+        scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1],
+                            c=anomaly_scores,
+                            cmap='RdYlBu_r',
+                            s=100,
+                            alpha=0.6)
+        
+        plt.colorbar(scatter, ax=ax2, label='Anomaly Score')
+        ax2.set_xlabel('PC1')
+        ax2.set_ylabel('PC2')
+        ax2.set_title('Decision Score Distribution')
+        
+        plt.show()
+
     
-    # Separate outliers and inliers
-    outliers = df[mask]
-    inliers = df[~mask]
-    
-    # Apply PCA with 3 components
-    pca = PCA(n_components=3)
-    X_pca = pca.fit_transform(df.values)
-    X_outliers = pca.transform(outliers.values)
-    X_inliers = pca.transform(inliers.values)
-    
-    # Plot 1: 3D PCA visualization
-    ax1 = fig.add_subplot(gs[0], projection='3d')
-    ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
-                c='royalblue', label='Inliers', alpha=0.6, s=50)
-    ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
-                c='crimson', label='Outliers', alpha=0.8, s=100)
-    
-    variance_ratio = pca.explained_variance_ratio_
-    ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
-    ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
-    ax1.set_zlabel(f'PC3 ({variance_ratio[2]:.1%} var)')
-    ax1.set_title('3D PCA Projection with OneClassSVM', pad=20)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: 3D Anomaly Score visualization
-    ax2 = fig.add_subplot(gs[1], projection='3d')
-    scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1], X_pca[:, 2],
-                          c=anomaly_scores,
-                          cmap='RdYlBu_r',
-                          s=100,
-                          alpha=0.6)
-    
-    # Highlight high anomaly scores
-    high_anomaly_mask = anomaly_scores > np.percentile(anomaly_scores, 90)
-    if np.any(high_anomaly_mask):
-        ax2.scatter(X_pca[high_anomaly_mask, 0],
-                   X_pca[high_anomaly_mask, 1],
-                   X_pca[high_anomaly_mask, 2],
-                   s=200,
-                   facecolors='none',
-                   edgecolors='red',
-                   alpha=0.5,
-                   label='High Anomaly Score')
-    
-    ax2.set_xlabel('PC1')
-    ax2.set_ylabel('PC2')
-    ax2.set_zlabel('PC3')
-    ax2.set_title('3D Anomaly Score Distribution', pad=20)
-    ax2.grid(True, alpha=0.3)
-    
-    # Add colorbar
-    plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
-    
-    # Add legend with custom handler
-    ax2.legend(handler_map={scatter: HandlerPathCollection(update_func=update_legend_marker_size)})
-    
-    plt.tight_layout()
-    plt.show()
-    
-    # Print summary statistics
-    print("\nOneClassSVM Detection Summary:")
-    print(f"Total points: {len(df)}")
-    print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-    print(f"Anomaly Score Range: {anomaly_scores.min():.2f} to {anomaly_scores.max():.2f}")
-    print(f"Variance explained by 3 PCs: {variance_ratio.sum():.1%}")
-    print("\nInteractive Controls:")
-    print("- Use arrow keys to rotate and tilt the plots")
-    print("- Close the plot window to exit")
+        print(f"Variance explained by 2 PCs: {sum(variance_ratio):.1%}")
+
 
 # Use physical CPU cores for computation
 PHYSICAL_CORES = psutil.cpu_count(logical=False)
@@ -205,7 +246,7 @@ class OneClassSVMDetector:
 
     def _plot(self, df: pd.DataFrame, anomaly_scores: np.ndarray):
         if df.shape[1] > 2:
-            visualize_outliers_3d(
+            visualize_one_class_svm_3d(
                 df,
                 anomaly_scores,
                 self.mask
@@ -216,6 +257,49 @@ class OneClassSVMDetector:
                 anomaly_scores,
                 self.mask
             )
+    def _print_results(self, df: pd.DataFrame, anomaly_scores: np.ndarray, best_params: SVMParams = None, best_score: float = None,):
+        """Print formatted results of OneClassSVM detection."""
+        print("\n" + "="*50)
+        print("CPU One-Class SVM Detection Results")
+        print("="*50)
+        
+        if best_params:
+            # Model Configuration
+            print("\nBest Parameters:")
+            print(f"  Kernel:     {best_params['kernel']}")
+            print(f"  Nu:         {best_params['nu']:.3f}")
+            print(f"  Gamma:      {best_params['gamma']:.4f}")
+            print(f"  Score:      {best_score:.4f}")
+        
+        # Detection Statistics
+        n_outliers = self.mask.sum()
+        outlier_ratio = n_outliers/len(df)
+        print("\nDetection Statistics:")
+        print(f"  Total points:      {len(df):,}")
+        print(f"  Outliers found:    {n_outliers:,} ({outlier_ratio:.1%})")
+        print(f"  Inliers retained:  {len(df)-n_outliers:,} ({1-outlier_ratio:.1%})")
+        
+        # Score Distribution
+        print("\nAnomaly Score Distribution:")
+        print(f"  Min score:     {anomaly_scores.min():.2f}")
+        print(f"  Max score:     {anomaly_scores.max():.2f}")
+        print(f"  Mean score:    {np.mean(anomaly_scores):.2f}")
+        print(f"  Median score:  {np.median(anomaly_scores):.2f}")
+        
+        # Percentiles
+        percentiles = np.percentile(anomaly_scores, [25, 75, 90, 95, 99])
+        print("\nScore Percentiles:")
+        print(f"  25th: {percentiles[0]:.2f}")
+        print(f"  75th: {percentiles[1]:.2f}")
+        print(f"  90th: {percentiles[2]:.2f}")
+        print(f"  95th: {percentiles[3]:.2f}")
+        print(f"  99th: {percentiles[4]:.2f}")
+        
+        print("\nVisualization Controls:")
+        print("  - Use mouse to rotate 3D plots")
+        print("  - Scroll to zoom in/out")
+        print("  - Right-click and drag to pan")
+        print("="*50 + "\n")
 
     def fit_predict_with_search(
         self, 
@@ -250,8 +334,7 @@ class OneClassSVMDetector:
         anomaly_scores = -self.pipeline.named_steps['svm'].decision_function(X)
         
         if plot_results:
-            print(f"\nBest parameters: {best_params}")
-            print(f"Best score: {best_score:.4f}")
+            self._print_results(df, anomaly_scores, self.pipeline.named_steps['svm'].get_params(), 0.0)
             self._plot(df, anomaly_scores)
         
         return df[self.mask], anomaly_scores
@@ -266,60 +349,11 @@ class OneClassSVMDetector:
         predictions = self.pipeline.fit_predict(X)
         self.mask = predictions == -1
         anomaly_scores = -self.pipeline.named_steps['svm'].decision_function(X)
-        
         if plot_results:
             self._plot(df, anomaly_scores)
         
         return df[self.mask], anomaly_scores
 
-def visualize_outliers_2d(
-    df: pd.DataFrame,
-    anomaly_scores: np.ndarray,
-    mask: np.ndarray,
-    fig_size: Tuple[int, int] = (15, 7)
-) -> None:
-    """Optimized 2D visualization of outliers"""
-    with plt.style.context('seaborn-v0_8-whitegrid'):
-        fig = plt.figure(figsize=fig_size)
-        gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
-        
-        # Perform PCA once
-        pca = PCA(n_components=2)
-        X_pca = pca.fit_transform(df.values)
-        
-        # Plot 1: PCA projection
-        ax1 = fig.add_subplot(gs[0])
-        ax1.scatter(X_pca[~mask, 0], X_pca[~mask, 1],
-                   c='royalblue', label='Inliers', alpha=0.6, s=50)
-        ax1.scatter(X_pca[mask, 0], X_pca[mask, 1],
-                   c='crimson', label='Outliers', alpha=0.8, s=100)
-        
-        variance_ratio = pca.explained_variance_ratio_
-        ax1.set_xlabel(f'PC1 ({variance_ratio[0]:.1%} var)')
-        ax1.set_ylabel(f'PC2 ({variance_ratio[1]:.1%} var)')
-        ax1.set_title('OneClassSVM Outlier Detection')
-        ax1.legend()
-        
-        # Plot 2: Decision scores
-        ax2 = fig.add_subplot(gs[1])
-        scatter = ax2.scatter(X_pca[:, 0], X_pca[:, 1],
-                            c=anomaly_scores,
-                            cmap='RdYlBu_r',
-                            s=100,
-                            alpha=0.6)
-        
-        plt.colorbar(scatter, ax=ax2, label='Anomaly Score')
-        ax2.set_xlabel('PC1')
-        ax2.set_ylabel('PC2')
-        ax2.set_title('Decision Score Distribution')
-        
-        plt.tight_layout()
-        plt.show()
-
-        print(f"Total points: {len(df)}")
-        print(f"Outliers detected: {mask.sum()} ({mask.sum()/len(df):.1%})")
-        print(f"Anomaly Score Range: {anomaly_scores.min():.2f} to {anomaly_scores.max():.2f}")
-        print(f"Variance explained by 2 PCs: {sum(variance_ratio):.1%}")
 
 
 
@@ -328,10 +362,10 @@ __all__ = ['OneClassSVMDetector']
 if __name__ == "__main__":
     # Example usage
     from sklearn.datasets import make_blobs
-    X, _ = make_blobs(n_samples=300, centers=1, random_state=42)
-    df = pd.DataFrame(X, columns=['X1', 'X2'])
+    X, _ = make_blobs(n_samples=500, centers=1, n_features=3, random_state=42)
+    df = pd.DataFrame(X, columns=['X1', 'X2', 'X3'])
     
-    detector = OneClassSVMDetector(nu=0.1)
+    detector = OneClassSVMDetector(nu=0.1, kernel='rbf', gamma='scale')
     outliers, scores = detector.fit_predict_with_search(df)
-    # detector.fit_predict(df)
+    detector.fit_predict(df)
     # print(f"Found {len(outliers)} outliers")
