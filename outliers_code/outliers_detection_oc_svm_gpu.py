@@ -48,15 +48,16 @@ def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         
         # Plot 1: 3D PCA visualization
         ax1 = fig.add_subplot(gs[0], projection='3d')
-        
+        scatter_inliers = None
+        scatter_outliers = None
         if has_inliers:
             X_inliers = pca.transform(inliers.values)
-            ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
+            scatter_inliers = ax1.scatter(X_inliers[:, 0], X_inliers[:, 1], X_inliers[:, 2],
                     c='royalblue', label='Inliers', alpha=0.6, s=50)
         
         if has_outliers:
             X_outliers = pca.transform(outliers.values)
-            ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
+            scatter_outliers = ax1.scatter(X_outliers[:, 0], X_outliers[:, 1], X_outliers[:, 2],
                     c='crimson', label='Outliers', alpha=0.8, s=100)
         
         variance_ratio = pca.explained_variance_ratio_
@@ -66,7 +67,12 @@ def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         ax1.set_title('3D PCA Projection with OneClassSVM', pad=20)
         
         if has_inliers or has_outliers:
-            ax1.legend()
+            ax1.legend(
+                handler_map={
+                    scatter_inliers: HandlerPathCollection(update_func=update_legend_marker_size),
+                    scatter_outliers: HandlerPathCollection(update_func=update_legend_marker_size)
+                }
+            )
         ax1.grid(True, alpha=0.3)
         
         # Plot 2: 3D Anomaly Score visualization
@@ -99,7 +105,7 @@ def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
         
         # Add legend with custom handler
-        ax2.legend(handler_map={scatter: HandlerPathCollection(update_func=update_legend_marker_size)})
+        ax2.legend(['Data Points'], handler_map={scatter: HandlerPathCollection(update_func=update_legend_marker_size)})
         
         plt.show()
         
@@ -200,105 +206,121 @@ def create_cuda_stream_pool(n_streams: int) -> List[cp.cuda.Stream]:
     """Create pool of CUDA streams for parallel execution"""
     return [cp.cuda.Stream() for _ in range(n_streams)]
 
-def gpu_svm_scoring(params: SVMParams, X: cp.ndarray, stream: cp.cuda.Stream) -> Tuple[float, SVMParams]:
-    """GPU version of OneClassSVM scoring with CUDA streams"""
-    with stream:
-        # Check for NaN/infinite values
-        if cp.any(~cp.isfinite(X)):
-            print("Warning: Input contains NaN or infinite values. Replacing with zeros.")
-            X = cp.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-        
-        pipeline = Pipeline([
-            ('scaler', cuStandardScaler()),
-            ('to_numpy', CupyToNumpy()),
-            ('svm', thuOCSVM(
-                kernel=params.kernel,
-                nu=params.nu,
-                gamma=params.gamma,
-                gpu_id=GPU_ID
-            ))
-        ])
-        
-        # Fit and score with error handling
-        try:
-            pipeline.fit(X)
-            scores = cp.array(-pipeline.named_steps['svm'].decision_function(X.get()).flatten())
-            
-            # Handle NaN/infinite scores
-            scores = cp.nan_to_num(scores, nan=cp.mean(scores[cp.isfinite(scores)]))
-            
-            # Calculate metrics with numerical stability
-            score_mean = cp.nanmean(scores)
-            score_std = cp.nanstd(scores)
-            
-            scores_cpu = cp.asnumpy(scores)
-            valid_scores = scores_cpu[np.isfinite(scores_cpu)]
-            
-            if len(valid_scores) < 2:
-                return 0.0, params
-                
-            score_range = np.ptp(valid_scores)
-            
-            if score_range < 1e-7:
-                score_skew = 0.0
-                score_kurtosis = 0.0
-            else:
-                normalized_scores = (valid_scores - np.mean(valid_scores)) / np.std(valid_scores)
-                score_skew = float(abs(skew(normalized_scores, bias=False)))
-                score_kurtosis = float(kurtosis(normalized_scores, bias=False))
-            
-            # Rest of the calculations with nan handling
-            extreme_threshold = score_mean - (3 * score_std)
-            extreme_ratio = float(cp.sum(cp.isfinite(scores) & (scores < extreme_threshold))) / len(scores)
-            extreme_penalty = cp.exp(extreme_ratio * 5) if extreme_ratio > 0.01 else 0.5
-            
-            # Use nanpercentile for percentile calculations
-            # With:
-            finite_scores = scores[cp.isfinite(scores)]
-            if len(finite_scores) > 0:
-                percentiles = cp.percentile(finite_scores, [0.1, 1, 5, 95, 99, 99.9])
-            else:
-                # Return default values if no valid scores
-                return 0.0, params
+def compute_gamma(params, X: np.ndarray) -> float:
+        gamma = 0
+        if params.gamma == 'auto':
+            gamma = 1/X.shape[1]
+        elif params.gamma == 'scale':
+            gamma = (1/(X.shape[1] * X.var()))
+        else:
+            try:
+                gamma = float(params.gamma)
+            except:
+                raise ValueError("Invalid gamma value. Use 'auto', 'scale', or a float value")
+        return gamma
 
-            # Rest of the code remains the same
-            density_gaps = cp.diff(percentiles)
-            tail_separation = float(density_gaps[0] + density_gaps[-1])
-            density_score = float(cp.nanmean(density_gaps[1:-1])) / (tail_separation + 1e-10)
+def gpu_svm_scoring(params: SVMParams, X: np.ndarray) -> Tuple[float, SVMParams]:
+    """GPU version of OneClassSVM scoring with CUDA streams"""
+
+    # Check for NaN/infinite values
+    if np.any(~np.isfinite(X)):
+        print("Warning: Input contains NaN or infinite values. Replacing with zeros.")
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # Scale X if values are too large
+    max_val = np.abs(X).max()
+    if max_val > 1e4:
+        X = X / max_val
+    
+    pipeline = Pipeline([
+        ('scaler', cuStandardScaler()),
+        ('svm', thuOCSVM(
+            kernel=params.kernel,
+            nu=params.nu,
+            gamma=params.gamma,
+            gpu_id=GPU_ID
+        ))
+    ])
+    
+    # Fit and score with error handling
+    try:
+        pipeline.fit(X)
+        scores = np.array(-pipeline.named_steps['svm'].decision_function(X).flatten())
+        
+        # Handle NaN/infinite scores
+        scores = np.clip(scores, -1e10, 1e10)
+        scores = np.nan_to_num(scores, nan=np.mean(scores[np.isfinite(scores)]))
+        
+        # Calculate metrics with numerical stability
+        score_mean = np.nanmean(scores)
+        score_std = np.nanstd(scores)
+        
+        valid_scores = scores[np.isfinite(scores)]
+        
+        if len(valid_scores) < 2:
+            return 0.0, params
             
-            threshold_factor = 5.0 + score_skew + (0.1 * score_kurtosis) + (2.0 * extreme_ratio)
-            threshold_score = score_mean - (threshold_factor * score_std)
-            potential_outliers = float(cp.sum(cp.isfinite(scores) & (scores < threshold_score))) / len(scores)
-            outlier_penalty = cp.exp(potential_outliers * 4) if potential_outliers > 0.01 else 0.5
-            
-            combined_score = (
-                0.25 * float(score_std) +
-                0.2 * tail_separation +
-                0.2 * (1 / (1 + score_skew)) +
-                0.1 * (1 / float(outlier_penalty)) +
-                0.15 * density_score +
-                0.1 * (1 / float(extreme_penalty))
-            )
-            
-            nu_penalty = cp.exp(params.nu * 15)
-            combined_score = combined_score / float(nu_penalty)
-            
-            stream.synchronize()
-            return 1 / (1 + np.exp(-combined_score)), params
-            
-        except Exception as e:
-            print(f"Warning: Error in scoring: {e}")
+        score_range = np.ptp(valid_scores)
+
+        valid_mean = np.mean(valid_scores)
+        valid_std = np.std(valid_scores)
+
+        eps = 1e-10
+        if valid_std < eps:
+            valid_std = eps
+        
+        if score_range < 1e-7:
+            score_skew = 0.0
+            score_kurtosis = 0.0
+        else:
+            normalized_scores = (valid_scores - valid_mean) / (valid_std + eps)
+            normalized_scores = np.clip(normalized_scores, -10, 10)
+
+            score_skew = float(abs(skew(normalized_scores, bias=False)))
+            score_kurtosis = float(kurtosis(normalized_scores, bias=False))
+        
+        # Rest of the calculations with nan handling
+        extreme_threshold = score_mean - (3 * score_std)
+        extreme_ratio = float(np.sum(np.isfinite(scores) & (scores < extreme_threshold))) / len(scores)
+        extreme_penalty = np.exp(extreme_ratio * 5) if extreme_ratio > 0.01 else 0.5
+        
+        # Use nanpercentile for percentile calculations
+        # With:
+        finite_scores = scores[np.isfinite(scores)]
+        if len(finite_scores) > 0:
+            percentiles = np.percentile(finite_scores, [0.1, 1, 5, 95, 99, 99.9])
+        else:
+            # Return default values if no valid scores
             return 0.0, params
 
-class CupyToNumpy:
-    def fit_transform(self, X, y=None):
-        return X.get() if hasattr(X, 'get') else X
-    
-    def fit(self, X, y=None):
-        return self
-    
-    def transform(self, X):
-        return X.get() if hasattr(X, 'get') else X
+        # Rest of the code remains the same
+        density_gaps = np.diff(percentiles)
+        tail_separation = float(density_gaps[0] + density_gaps[-1])
+        density_score = float(np.nanmean(density_gaps[1:-1])) / (tail_separation + 1e-10)
+        
+        threshold_factor = 5.0 + score_skew + (0.1 * score_kurtosis) + (2.0 * extreme_ratio)
+        threshold_score = score_mean - (threshold_factor * score_std)
+        potential_outliers = float(np.sum(np.isfinite(scores) & (scores < threshold_score))) / len(scores)
+        outlier_penalty = np.exp(potential_outliers * 4) if potential_outliers > 0.01 else 0.5
+        
+        combined_score = (
+            0.25 * float(score_std) +
+            0.2 * tail_separation +
+            0.2 * (1 / (1 + score_skew)) +
+            0.1 * (1 / float(outlier_penalty)) +
+            0.15 * density_score +
+            0.1 * (1 / float(extreme_penalty))
+        )
+        
+        nu_penalty = np.exp(params.nu * 15)
+        combined_score = combined_score / float(nu_penalty)
+        
+        return 1 / (1 + np.exp(-combined_score)), params
+        
+    except Exception as e:
+        print(f"Warning: Error in scoring: {e}")
+        return 0.0, params
+
 
 class GPUOneClassSVMDetector:
     def __init__(
@@ -379,23 +401,35 @@ class GPUOneClassSVMDetector:
         print("="*50 + "\n")
 
     def _generate_param_combinations(self, n_iter: int) -> List[SVMParams]:
-        """Generate parameter combinations with enhanced constraints.
+        """Generate parameter combinations optimized for ~1% outlier detection.
         
         Args:
             n_iter: Number of parameter combinations to generate
-            
+                
         Returns:
             List of parameter combinations
         """
         params_list = []
         for _ in range(n_iter):
+            # Set nu to target roughly 1% outliers with some variation
+            # Using a narrower range around 0.01 (1%)
+            nu = np.random.uniform(0.005, 0.015)
+            
+            # Adjust gamma range for more conservative boundary estimates
+            # Using log scale but with a narrower range focused on smaller values
+            gamma_exp = np.random.uniform(np.log(1e-5), np.log(1))
+            gamma = str(np.exp(gamma_exp))
+            
+            # Prefer 'rbf' kernel as it typically provides better control over decision boundaries
+            kernel = np.random.choice(['rbf', 'sigmoid'], p=[0.8, 0.2])
+            
             params = SVMParams(
-                kernel=np.random.choice(['rbf', 'sigmoid']),
-                nu=np.random.uniform(0.005, 0.15),
-                gamma=np.exp(np.random.uniform(np.log(1e-4), np.log(1)))
+                kernel=kernel,
+                nu=nu,
+                gamma=gamma  # Remove 'auto' and 'scale' options for better control
             )
             params_list.append(params)
-        print
+        
         return params_list
 
     def _adaptive_nu(self, scores: np.ndarray) -> float:
@@ -413,6 +447,8 @@ class GPUOneClassSVMDetector:
         
         nu = np.mean(scores < threshold)
         return min(max(nu, 0.01), 0.5)
+    
+    
 
     def fit_predict(
     self,
@@ -421,16 +457,7 @@ class GPUOneClassSVMDetector:
 ) -> Tuple[pd.DataFrame, np.ndarray]:
         """Fit the model and predict outliers using GPU acceleration."""
         X = df.values
-        gamma = 0
-        if self.gamma == 'auto':
-            gamma = 1/X.shape[1]
-        elif self.gamma == 'scale':
-            gamma = (1/(X.shape[1] * X.var()))
-        else:
-            try:
-                gamma = float(self.gamma)
-            except:
-                raise ValueError("Invalid gamma value. Use 'auto', 'scale', or a float value")
+        gamma = compute_gamma(self, X)
 
         self.pipeline = Pipeline([
             ('scaler', cuStandardScaler()),
@@ -447,7 +474,6 @@ class GPUOneClassSVMDetector:
         self.pipeline.fit(X)
         predictions = self.pipeline.predict(X)  # This returns numpy array
         
-        # No need for .get() since predictions are already on CPU
         self.mask = np.array(predictions == -1)
         
         anomaly_scores = -self.pipeline.named_steps['svm'].decision_function(X).flatten()
@@ -467,21 +493,19 @@ class GPUOneClassSVMDetector:
         """GPU-accelerated parameter search using CUDA streams"""
         
         # Convert data to GPU once
-        X = cp.array(df.values)
+        X = np.array(df.values)
         params_list = self._generate_param_combinations(n_iter)
         
-        # Create stream pool
-        streams = create_cuda_stream_pool(min(8, n_iter))  # Limit concurrent streams
+    
         
         # Run parameter search on GPU
         results = []
         for i, params in tqdm(enumerate(params_list), desc="Parameter Search", total=len(params_list)):
-            stream = streams[i % len(streams)]
-            score, params = gpu_svm_scoring(params, X, stream)
+            params.gamma = compute_gamma(params, X)
+            print(f"Processing params: {params}")
+            score, params = gpu_svm_scoring(params, X)
             results.append((score, params))
             
-        # Synchronize all streams
-        cp.cuda.Stream.null.synchronize()
         
         # Find best parameters
         best_score, best_params = max(results, key=lambda x: x[0])
@@ -489,7 +513,6 @@ class GPUOneClassSVMDetector:
         # Configure final model
         self.pipeline = Pipeline([
             ('scaler', cuStandardScaler()),
-            ('to_numpy', CupyToNumpy()),
             ('svm', thuOCSVM(
                 kernel=best_params.kernel,
                 nu=best_params.nu,
@@ -503,7 +526,7 @@ class GPUOneClassSVMDetector:
         predictions = self.pipeline.predict(X) 
 
         self.mask = np.array(predictions == -1)
-        anomaly_scores = -self.pipeline.named_steps['svm'].decision_function(X.get()).flatten()
+        anomaly_scores = -self.pipeline.named_steps['svm'].decision_function(X).flatten()
         
         if plot_results:
             self._print_results(df, best_params.__dict__, best_score, anomaly_scores)
