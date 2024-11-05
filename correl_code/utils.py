@@ -74,7 +74,7 @@ def display_top_correlations(corr_matrix, n=6):
         
 def print_top_positive_correlations(df, message="Top Positive Correlations"):
     # Set color palette
-    seaborn.set_palette("husl")
+
 
     # Increase the figure size
     fig, ax = plt.subplots(figsize=(16, 8))
@@ -121,7 +121,6 @@ def print_top_positive_correlations(df, message="Top Positive Correlations"):
 
 def print_top_negative_correlations(df, message="Top Negative Correlations"):
     # Set color palette
-    seaborn.set_palette("husl")
 
     # Increase the figure size
     fig, ax = plt.subplots(figsize=(16, 8))

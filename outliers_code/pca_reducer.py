@@ -278,7 +278,7 @@ def combine_race_points(df, add_to_df=True, column_name='pca_race_points', plot_
     
 
 
-__all__ = ['combine_race_points']
+__all__ = ['combine_race_points','FeaturesPCAReducer']
 
 
 if __name__ == '__main__':

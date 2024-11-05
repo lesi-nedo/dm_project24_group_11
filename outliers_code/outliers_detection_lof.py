@@ -179,48 +179,54 @@ class LOFParams:
         return result
 
 def parallel_lof_scoring(params: LOFParams, X: np.ndarray) -> Tuple[float, LOFParams]:
-    """Enhanced parallel version of LOF scoring with better metrics"""
+    """Enhanced LOF scoring with improved outlier detection"""
+    # 1. Add PCA preprocessing for better feature space representation
     pipeline = Pipeline([
-        ('scaler', RobustScaler()),
         ('lof', LocalOutlierFactor(
             n_neighbors=params.n_neighbors,
             contamination=params.contamination,
             leaf_size=params.leaf_size,
             p=params.p,
-            metric=params.metric
+            metric=params.metric,
+            n_jobs=-1  # Parallel processing
         ))
     ])
-    
-    # Fit LOF and get scores
+
+    # 2. Improve score calculation
     pipeline.fit(X)
     lof = pipeline.named_steps['lof']
     neg_factors = lof.negative_outlier_factor_
-    
-    # Enhanced scoring system
-    thresh = np.percentile(neg_factors, 95)
-    potential_outliers = neg_factors < thresh
-    
-    # Improved separation score with density consideration
-    separation_score = np.abs(np.mean(neg_factors[potential_outliers]) - 
-                            np.mean(neg_factors[~potential_outliers]))
-    
-    # Enhanced density scoring
-    density_var = np.std(neg_factors) / (np.max(neg_factors) - np.min(neg_factors))
-    density_score = 1 / (1 + density_var)
-    
-    # Distance-based scoring with neighbor consistency
-    distances = lof._distances_fit_X_
-    avg_neighbor_dist = np.mean(distances, axis=1)
-    distance_score = 1 / (1 + np.std(avg_neighbor_dist))
-    
-    # Additional isolation score
-    isolation_score = np.mean(distances[:, 1:]) / np.mean(distances[:, 0])
-    
-    final_score = (0.4 * separation_score + 
-                  0.3 * density_score +
-                  0.2 * distance_score +
-                  0.1 * isolation_score)
-    
+
+    # 3. Dynamic thresholding based on score distribution
+    scores = -neg_factors  # Convert to positive scores for easier interpretation
+    mad = np.median(np.abs(scores - np.median(scores)))
+    thresh = np.median(scores) + (3 * mad)  # More robust than percentile
+
+    # 4. Enhanced scoring metrics
+    potential_outliers = scores > thresh
+
+    # Improved separation with local density consideration
+    k_distances = lof._distances_fit_X_
+    local_density = np.mean(k_distances, axis=1)
+
+    # Calculate relative density deviation
+    density_ratio = local_density / (np.median(local_density) + 1e-8)  # Add epsilon to avoid division by zero
+
+    # 5. Improved scoring components
+    separation_score = np.abs(np.mean(scores[potential_outliers]) -
+                             np.mean(scores[~potential_outliers])) / np.std(scores)
+
+    density_score = np.mean(density_ratio[potential_outliers]) / np.mean(density_ratio)
+
+    # 6. Consider local reachability
+    reachability = np.max(k_distances, axis=1) / (np.min(k_distances, axis=1) + 1e-8)  # Add epsilon to avoid division by zero
+    reach_score = np.mean(reachability[potential_outliers]) / (np.mean(reachability) + 1e-8)  # Add epsilon to avoid division by zero
+
+    # 7. Weighted final score with emphasis on density
+    final_score = (0.35 * separation_score +
+                   0.40 * density_score +
+                   0.25 * reach_score)
+
     return final_score, params
 
 class LOFOutliersDetector:
@@ -281,7 +287,7 @@ class LOFOutliersDetector:
         params_list = self._generate_param_combinations(n_iter)
         
         # Parallel parameter search
-        with ProcessPoolExecutor(max_workers=psutil.cpu_count(logical=False)) as executor:
+        with ProcessPoolExecutor(max_workers=int(psutil.cpu_count(logical=False)/2.0)) as executor:
             results = list(executor.map(
                 partial(parallel_lof_scoring, X=X),
                 params_list

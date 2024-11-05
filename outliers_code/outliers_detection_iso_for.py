@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import IsolationForest
 from sklearn.model_selection import RandomizedSearchCV
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import make_scorer
 from scipy.stats import randint, uniform
@@ -149,7 +149,6 @@ class IForestParams:
 def parallel_iforest_scoring(params: IForestParams, X: np.ndarray) -> Tuple[float, IForestParams]:
     """Enhanced parallel Isolation Forest scoring with extreme value control"""
     pipeline = Pipeline([
-        ('scaler', StandardScaler()),
         ('iforest', IsolationForest(
             n_estimators=params.n_estimators,
             max_samples=params.max_samples,
@@ -171,7 +170,7 @@ def parallel_iforest_scoring(params: IForestParams, X: np.ndarray) -> Tuple[floa
     # Extreme value analysis - now used
     extreme_threshold = score_mean - (3 * score_std)
     extreme_ratio = np.sum(scores < extreme_threshold) / len(scores)
-    extreme_penalty = np.exp(extreme_ratio * 5) if extreme_ratio > 0.01 else 0.5
+    extreme_penalty = np.exp(extreme_ratio ) if extreme_ratio > 0.01 else 1.0
     
     # Density metrics
     percentiles = np.percentile(scores, [0.1, 1, 5, 95, 99, 99.9])

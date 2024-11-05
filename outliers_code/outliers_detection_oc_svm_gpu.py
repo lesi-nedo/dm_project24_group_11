@@ -2,15 +2,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import psutil
-import cupy as cp
+import torch
+
 from thundersvm import OneClassSVM as thuOCSVM
-from cuml.preprocessing import StandardScaler as cuStandardScaler
-from cuml.decomposition import PCA as cuPCA
+
+
 
 from dataclasses import dataclass
 from sklearn.pipeline import Pipeline
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+ 
 from typing import Tuple, List
 from matplotlib.legend_handler import HandlerPathCollection
 from scipy.stats import skew, kurtosis
@@ -39,7 +41,7 @@ def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         inliers = df[~mask]
         
         # Apply PCA with 3 components
-        pca = cuPCA(n_components=3)
+        pca = PCA(n_components=3)
         X_pca = pca.fit_transform(df.values)
         
         # Check if we have both inliers and outliers
@@ -127,7 +129,7 @@ def visualize_outliers_2d(
         gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
         
         # Perform PCA once
-        pca = cuPCA(n_components=2)
+        pca = PCA(n_components=2)
         X_pca = pca.fit_transform(df.values)
         
         # Plot 1: PCA projection
@@ -164,27 +166,9 @@ def visualize_outliers_2d(
 
 
 def get_gpu_id():
-    """Get available GPU ID for CUDA operations"""
-    try:
-        # Get number of available GPUs
-        n_gpus = cp.cuda.runtime.getDeviceCount()
-        
-        if n_gpus == 0:
-            print("No CUDA-capable GPU found")
-            return -1
-            
-        # Get current device ID
-        current_id = cp.cuda.runtime.getDevice()
-        
-        # Get device properties
-        device_props = cp.cuda.runtime.getDeviceProperties(current_id)
-        print(f"Using GPU {current_id}: {device_props['name'].decode()}")
-        
-        return current_id
-        
-    except Exception as e:
-        print(f"Error accessing GPU: {e}")
-        return -1
+    if torch.cuda.is_available():
+        return torch.cuda.current_device()
+    return None
     
 # Usage:
 GPU_ID = get_gpu_id()
@@ -202,9 +186,6 @@ class SVMParams:
     nu: float
     gamma: float
 
-def create_cuda_stream_pool(n_streams: int) -> List[cp.cuda.Stream]:
-    """Create pool of CUDA streams for parallel execution"""
-    return [cp.cuda.Stream() for _ in range(n_streams)]
 
 def compute_gamma(params, X: np.ndarray) -> float:
         gamma = 0
@@ -233,7 +214,7 @@ def gpu_svm_scoring(params: SVMParams, X: np.ndarray) -> Tuple[float, SVMParams]
         X = X / max_val
     
     pipeline = Pipeline([
-        ('scaler', cuStandardScaler()),
+        ('scaler', StandardScaler()),
         ('svm', thuOCSVM(
             kernel=params.kernel,
             nu=params.nu,
@@ -460,7 +441,7 @@ class GPUOneClassSVMDetector:
         gamma = compute_gamma(self, X)
 
         self.pipeline = Pipeline([
-            ('scaler', cuStandardScaler()),
+            ('scaler', StandardScaler()),
             ('svm', thuOCSVM(
                 kernel=self.kernel,
                 nu=self.nu,
@@ -512,7 +493,7 @@ class GPUOneClassSVMDetector:
         
         # Configure final model
         self.pipeline = Pipeline([
-            ('scaler', cuStandardScaler()),
+            ('scaler', StandardScaler()),
             ('svm', thuOCSVM(
                 kernel=best_params.kernel,
                 nu=best_params.nu,
