@@ -1,6 +1,9 @@
 import shutil
 from pathlib import Path
 from datetime import datetime
+import subprocess
+import sys
+import importlib.util
 
 def move_to_tmp(file_path, keep_original=False):
     """
@@ -44,3 +47,16 @@ def move_to_tmp(file_path, keep_original=False):
         print(f"Error occurred: {str(e)}")
         return None
 
+
+def check_and_install(package):
+    """
+        This function checks if a package is installed and installs it if not.
+    """
+
+    if importlib.util.find_spec(package) is None:
+        print(f"{package} not found, installing...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        print(f"{package} has been installed")
+    
+
+__all__ = ['move_to_tmp', 'check_and_install']

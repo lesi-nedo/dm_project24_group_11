@@ -33,13 +33,14 @@ from pandarallel import pandarallel
 
 
 
-pandarallel.initialize(progress_bar=True)
+pandarallel.initialize(progress_bar=False, verbose=0)
 real_cpu_count = psutil.cpu_count(logical=False)
 
 
 
 
 tqdm.pandas()  # Enable progress_apply
+mp.set_start_method('spawn', force=True)
 
 
 def add_jitter(data, epsilon=1e-9):
@@ -474,3 +475,71 @@ def print_density_info(stats_races, predictions, y_test, feature_to_predict):
 
 
 __all__ = ['predict_feature_density', 'print_density_info']
+
+
+if __name__ == '__main__':
+  
+    from datetime import datetime, timedelta
+    
+    # Set multiprocessing start method
+    
+    # Create synthetic test data
+    np.random.seed(42)
+    n_samples = 100
+    
+    # Generate dates for the last 100 days
+    base_date = datetime(2024, 1, 1)
+    dates = [base_date + timedelta(days=x) for x in range(n_samples)]
+    
+    try:
+        test_df = pd.DataFrame({
+            'date': dates,
+            'climb_total': np.random.normal(500, 100, n_samples),
+            'length': np.random.normal(200, 30, n_samples),
+            'points': np.random.normal(50, 10, n_samples),
+            'cyclist_age': np.random.normal(28, 3, n_samples),
+            'race_id': range(n_samples),
+            'cyclist': [f'cyclist_{i}' for i in range(n_samples)],
+            'nationality': ['ITA' for _ in range(n_samples)],
+            'is_tarmac': [1 for _ in range(n_samples)],
+            'startlist_quality': np.random.normal(70, 10, n_samples),  # Add missing required column
+            'profile': ['hilly' for _ in range(n_samples)]  # Add missing required column
+        })
+        
+        # Ensure data types
+        test_df['date'] = pd.to_datetime(test_df['date'])
+        test_df['race_id'] = test_df['race_id'].astype(int)
+        test_df['is_tarmac'] = test_df['is_tarmac'].astype(int)
+        
+        # Define normal features with all required fields
+        normal_features = {
+            'length': {'mean': test_df['length'].mean(), 'std': test_df['length'].std()},
+            'points': {'mean': test_df['points'].mean(), 'std': test_df['points'].std()},
+            'cyclist_age': {'mean': test_df['cyclist_age'].mean(), 'std': test_df['cyclist_age'].std()},
+            'startlist_quality': {'mean': test_df['startlist_quality'].mean(), 'std': test_df['startlist_quality'].std()}
+        }
+        
+        # Create test set
+        test_indices = np.random.choice(test_df.index, size=int(n_samples * 0.2), replace=False)
+        y_test = test_df.loc[test_indices, 'climb_total'].copy()
+        test_df.loc[test_indices, 'climb_total'] = np.nan
+        
+        # Run predictions with error handling
+        predictions, stats = predict_feature_density(
+            df=test_df,
+            segmentation_features=normal_features,
+            n_clusters_final=3,
+            feature_to_predict='climb_total'
+        )
+        
+        # Print results
+        print("\nTest Results:")
+        print("-------------")
+        print_density_info(stats, predictions, y_test, 'climb_total')
+        
+        print("\nSegment Distribution:")
+        print(predictions['segment'].value_counts())
+        
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise
