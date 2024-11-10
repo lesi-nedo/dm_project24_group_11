@@ -159,8 +159,7 @@ def parallel_iforest_scoring(params: IForestParams, X: np.ndarray) -> Tuple[floa
     ])
     
     pipeline.fit(X)
-    scores = pipeline.named_steps['iforest'].decision_function(X)
-    
+    scores = pipeline.named_steps['iforest'].decision_function(X) + 0.5
     # Core metrics
     score_mean = np.mean(scores)
     score_std = np.std(scores)
