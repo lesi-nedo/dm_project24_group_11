@@ -226,7 +226,7 @@ def gpu_svm_scoring(params: SVMParams, X: np.ndarray) -> Tuple[float, SVMParams]
     # Fit and score with error handling
     try:
         pipeline.fit(X)
-        scores = np.array(-pipeline.named_steps['svm'].decision_function(X).flatten())
+        scores = np.array(pipeline.named_steps['svm'].decision_function(X).flatten())
         
         # Handle NaN/infinite scores
         scores = np.clip(scores, -1e10, 1e10)
