@@ -507,7 +507,7 @@ class GPUOneClassSVMDetector:
         predictions = self.pipeline.predict(X) 
 
         self.mask = np.array(predictions == -1)
-        anomaly_scores = -self.pipeline.named_steps['svm'].decision_function(X).flatten()
+        anomaly_scores = self.pipeline.named_steps['svm'].decision_function(X).flatten()
         
         if plot_results:
             self._print_results(df, best_params.__dict__, best_score, anomaly_scores)
