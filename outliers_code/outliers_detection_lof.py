@@ -316,9 +316,10 @@ class LOFOutliersDetector:
         # Final fit and predict
         outliers = self.pipeline.fit_predict(X)
         self.mask = outliers == -1
+        lof_score = -self.pipeline.named_steps['lof'].negative_outlier_factor_
         # LOFParams to di
         if plot_results:
-            self._print_results(df, best_params.to_dict(), best_score, initial_scores)
+            self._print_results(df, best_params.to_dict(), best_score, lof_score)
             self._plot(df)
         
         return df[self.mask]
