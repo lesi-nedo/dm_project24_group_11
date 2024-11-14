@@ -2,10 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import plotly.graph_objects as go
 import plotly.express as px
+import os
 
 
 from sklearn.decomposition import PCA
+from collections import defaultdict
 
 from typing import Dict
 
@@ -196,7 +199,6 @@ def visualize_outliers_3d(data, lof_set, iso_set, oc_svm_set):
     )
     
     # Calculate intersections and unique points
-    all_outliers = lof_set | iso_set | oc_svm_set
     lof_iso = lof_set & iso_set
     lof_oc_svm = lof_set & oc_svm_set
     iso_oc_svm = iso_set & oc_svm_set
@@ -233,55 +235,396 @@ def visualize_outliers_3d(data, lof_set, iso_set, oc_svm_set):
         'IsoForest & OC-SVM': '#800080',   # Purple
         'LOF only': '#0000FF',             # Blue
         'IsoForest only': '#008000',       # Green
-        'OC-SVM only': '#000000',          # Black
+        'OC-SVM only': '#FFC0CB',          # Pink
         'Normal': '#808080'                # Gray
     }
-    
-    # Create 3D scatter plot
-    fig = px.scatter_3d(
-        pca_df,
-        x='PC1',
-        y='PC2',
-        z='PC3',
-        color='Category',
-        color_discrete_map=color_discrete_map,
-        title='3D Visualization of Outliers (PCA)',
-        labels={
-            'PC1': f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)',
-            'PC2': f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)',
-            'PC3': f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)'
-        }
-    )
-    
-    # Update layout for better visualization
-    fig.update_traces(marker=dict(size=5))
-    fig.update_layout(
-        legend_title_text='Detection Category',
-        scene=dict(
-            xaxis_title='PC1',
-            yaxis_title='PC2',
-            zaxis_title='PC3'
-        )
-    )
-    
-    return fig, pca_df
+    with plt.style.context('seaborn-v0_8-whitegrid'):
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
 
-def print_summary_statistics(lof_set, iso_set, oc_svm_set):
+        # Plot each category with different colors
+        for category, color in color_discrete_map.items():
+            mask = pca_df['Category'] == category
+            ax.scatter(
+                pca_df[mask]['PC1'],
+                pca_df[mask]['PC2'],
+                pca_df[mask]['PC3'],
+                c=color,
+                label=category,
+                s=50,  # marker size
+                alpha=0.6  # transparency
+            )
+
+        # Set labels and title
+        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
+        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
+        ax.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
+        ax.set_title('3D Visualization of Outliers (PCA)')
+
+        # Add legend
+        ax.legend(title='Detection Category')
+
+        # Adjust view angle for better visualization
+        ax.view_init(elev=20, azim=45)
+
+    del pca_df
+
+
+
+
+
+def analyze_outlier_types(data, outlier_indices, min_races_threshold=5):
     """
-    Print summary statistics about the outliers detected by each algorithm
-    and their intersections.
-    """
-    all_common = lof_set & iso_set & oc_svm_set
-    lof_iso = lof_set & iso_set
-    lof_oc_svm = lof_set & oc_svm_set
-    iso_oc_svm = iso_set & oc_svm_set
+    Analyze whether outliers are primarily associated with specific cyclists or races.
     
-    print("Summary Statistics:")
-    print(f"Total outliers detected by LOF: {len(lof_set)}")
-    print(f"Total outliers detected by Isolation Forest: {len(iso_set)}")
-    print(f"Total outliers detected by OC-SVM: {len(oc_svm_set)}")
-    print("\nIntersections:")
-    print(f"Detected by all three methods: {len(all_common)}")
-    print(f"Common between LOF and IsoForest: {len(lof_iso)}")
-    print(f"Common between LOF and OC-SVM: {len(lof_oc_svm)}")
-    print(f"Common between IsoForest and OC-SVM: {len(iso_oc_svm)}")
+    Parameters:
+    -----------
+    data : pandas.DataFrame
+        Original dataset
+    outlier_indices : set
+        Set of indices marking outlier points
+    min_races_threshold : int
+        Minimum number of races to consider a pattern significant
+        
+    Returns:
+    --------
+    dict : Dictionary containing cyclist and race outlier classifications
+    """
+    # Count occurrences for cyclists and races
+    cyclist_counts = defaultdict(int)
+    race_counts = defaultdict(int)
+    
+    # Count total appearances for each cyclist and race
+    cyclist_totals = data['cyclist'].value_counts()
+    race_totals = data['_url_race'].value_counts()
+    
+    # Count outlier occurrences
+    for idx in outlier_indices:
+        cyclist = data.loc[idx, 'cyclist']
+        race = data.loc[idx, '_url_race']
+        cyclist_counts[cyclist] += 1
+        race_counts[race] += 1
+    
+    # Calculate outlier ratios
+    cyclist_ratios = {
+        cyclist: count / cyclist_totals[cyclist]
+        for cyclist, count in cyclist_counts.items()
+        if cyclist_totals[cyclist] >= min_races_threshold
+    }
+    
+    race_ratios = {
+        race: count / race_totals[race]
+        for race, count in race_counts.items()
+        if race_totals[race] >= min_races_threshold
+    }
+    
+    # Classify outliers
+    cyclist_outliers = set()
+    race_outliers = set()
+    
+    # If a cyclist/race has more than 50% of their entries as outliers,
+    # consider them systematic outliers
+    threshold = 0.5
+    
+    for idx in outlier_indices:
+        cyclist = data.loc[idx, 'cyclist']
+        race = data.loc[idx, '_url_race']
+        
+        if cyclist in cyclist_ratios and cyclist_ratios[cyclist] > threshold:
+            cyclist_outliers.add(idx)
+        elif race in race_ratios and race_ratios[race] > threshold:
+            race_outliers.add(idx)
+    
+    print(f"Total cyclist outliers: {len(cyclist_outliers)}")
+    print(f"Total race outliers: {len(race_outliers)}")
+            
+    return {
+        'cyclist_outliers': cyclist_outliers,
+        'race_outliers': race_outliers,
+        'cyclist_ratios': cyclist_ratios,
+        'race_ratios': race_ratios
+    }
+
+def visualize_outlier_types(data, lof_set, iso_set, oc_svm_set, min_races_threshold=5, sample_size=8000, random_state=42):
+    """
+    Create separate visualizations for cyclist and race outliers.
+    
+    Parameters:
+    -----------
+    data : pandas.DataFrame
+        Original dataset
+    lof_set, iso_set, oc_svm_set : set
+        Sets of indices for outliers detected by different methods
+    min_races_threshold : int
+        Minimum number of races to consider a pattern significant
+    
+    Returns:
+    --------
+    tuple : (cyclist_fig, race_fig, summary_dict)
+    """
+    # Combine all outliers
+    all_outliers = lof_set.union(iso_set).union(oc_svm_set)
+    all_outliers_set = set(all_outliers)
+    
+    # Analyze outlier types using full dataset
+    outlier_analysis = analyze_outlier_types(data, all_outliers, min_races_threshold)
+    cyclist_outliers = outlier_analysis['cyclist_outliers']
+    race_outliers = outlier_analysis['race_outliers']
+    
+    # Sample indices while preserving outlier proportions
+    normal_indices = set(range(len(data))) - all_outliers_set
+    n_outliers = min(len(all_outliers), int(sample_size * len(all_outliers) / len(data)))
+    n_normal = sample_size - n_outliers
+    
+    np.random.seed(random_state)
+    sampled_normal = set(np.random.choice(list(normal_indices), n_normal, replace=False))
+    sampled_indices = list(sampled_normal.union(all_outliers))
+    
+    # Sample data
+    sampled_data = data.iloc[sampled_indices].copy()
+    data = sampled_data
+
+    # Select numerical features for PCA
+    numerical_features = [
+        'birth_year', 'weight', 'height', 'points', 'uci_points',
+        'length', 'climb_total', 'profile', 'startlist_quality',
+        'cyclist_age', 'delta'
+    ]
+    
+    # Prepare data for PCA
+    X = data[numerical_features]
+    
+    # Perform PCA
+    pca = PCA(n_components=3)
+    data_pca = pca.fit_transform(X)
+    
+    # Create DataFrame with PCA components
+    pca_df = pd.DataFrame(
+        data_pca,
+        columns=['PC1', 'PC2', 'PC3'],
+        index=data.index
+    )
+    
+    # Add categories for cyclist visualization
+    pca_df['Cyclist_Category'] = 'Normal'
+    pca_df.loc[list(cyclist_outliers), 'Cyclist_Category'] = 'Cyclist Outlier'
+    
+    # Add categories for race visualization
+    pca_df['Race_Category'] = 'Normal'
+    pca_df.loc[list(race_outliers), 'Race_Category'] = 'Race Outlier'
+
+    with plt.style.context('seaborn-v0_8-whitegrid'):
+        fig = plt.figure(figsize=(12, 6), constrained_layout=True)
+
+        if len(cyclist_outliers) > 0:
+            ax1 = fig.add_subplot(121, projection='3d')
+            
+            # Create cyclist outliers visualization
+            for category in ['Normal', 'Cyclist Outlier']:
+                mask = pca_df['Cyclist_Category'] == category
+                color = '#FF0000' if category == 'Cyclist Outlier' else '#808080'
+                ax1.scatter(
+                    pca_df[mask]['PC1'],
+                    pca_df[mask]['PC2'], 
+                    pca_df[mask]['PC3'],
+                    c=color,
+                    label=category
+                )
+            
+            ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
+            ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
+            ax1.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
+            ax1.set_title('Cyclist-related Outliers (PCA)')
+            ax1.legend()
+            ax1.view_init(elev=20, azim=45)
+
+
+        elif len(race_outliers) > 0:
+
+            ax2 = fig.add_subplot(122, projection='3d')
+            
+            # Create race outliers visualization
+            for category in ['Normal', 'Race Outlier']:
+                mask = pca_df['Race_Category'] == category
+                color = '#0000FF' if category == 'Race Outlier' else '#808080'
+                ax2.scatter(
+                    pca_df[mask]['PC1'],
+                    pca_df[mask]['PC2'],
+                    pca_df[mask]['PC3'],
+                    c=color,
+                    label=category
+                )
+            
+            ax2.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
+            ax2.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
+            ax2.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
+            ax2.set_title('Race-related Outliers (PCA)')
+            ax2.legend()
+            ax2.view_init(elev=20, azim=45)
+        else:
+            print("No cyclist nor race outliers detected in the sample")
+    
+    # Prepare summary statistics
+    summary = {
+        'total_outliers': len(all_outliers),
+        'cyclist_outliers': len(cyclist_outliers),
+        'race_outliers': len(race_outliers),
+        'unclassified_outliers': len(all_outliers_set - cyclist_outliers - race_outliers),
+        'top_cyclist_outliers': sorted(
+            outlier_analysis['cyclist_ratios'].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:10],
+        'top_race_outliers': sorted(
+            outlier_analysis['race_ratios'].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:10]
+    }
+    del sampled_data
+    return summary
+
+def print_outlier_summary(summary):
+    """Print a formatted summary of the outlier analysis."""
+    print("\nOutlier Analysis Summary:")
+    print(f"Total outliers detected: {summary['total_outliers']}")
+    print(f"Cyclist-related outliers: {summary['cyclist_outliers']}")
+    print(f"Race-related outliers: {summary['race_outliers']}")
+    print(f"Unclassified outliers: {summary['unclassified_outliers']}")
+    
+    print("\nTop 10 Cyclists with highest outlier ratios:")
+    for cyclist, ratio in summary['top_cyclist_outliers']:
+        print(f"{cyclist}: {ratio:.2%}")
+    
+    print("\nTop 10 Races with highest outlier ratios:")
+    for race, ratio in summary['top_race_outliers']:
+        print(f"{race}: {ratio:.2%}")
+
+
+def create_temporal_visualizations(data, outliers_df):
+    """Create temporal visualizations for outlier analysis with improved clarity and aesthetics."""
+    
+    # Convert date strings to datetime
+    data['date'] = pd.to_datetime(data['date'])
+    outliers_df['date'] = pd.to_datetime(outliers_df['date'])
+    
+    # 1. Time Series Plot
+    outliers_over_time = outliers_df.groupby('date').size().reset_index(name='outlier_count')
+    fig_timeseries = px.line(outliers_over_time, 
+                             x='date', 
+                             y='outlier_count',
+                             title='Outliers Over Time')
+    fig_timeseries.update_layout(yaxis_title='Number of Outliers', xaxis_title='Date')
+    
+    # 2. Seasonal Plot with Monthly Box Plot
+    outliers_over_time['month'] = outliers_over_time['date'].dt.month
+    outliers_over_time['year'] = outliers_over_time['date'].dt.year
+    fig_seasonal = px.box(outliers_over_time, 
+                          x='month', 
+                          y='outlier_count', 
+                          title='Monthly Outlier Distribution Across Years',
+                          labels={'month': 'Month', 'outlier_count': 'Outlier Count'})
+    
+    # 3. Interactive Timeline with Line and Markers
+    fig_timeline = go.Figure()
+    fig_timeline.add_trace(go.Scatter(
+        x=outliers_over_time['date'],
+        y=outliers_over_time['outlier_count'],
+        mode='lines+markers',
+        name='Outliers',
+        line=dict(color='royalblue', width=2),
+        marker=dict(size=5, color='orange'),
+        hovertemplate='Date: %{x}<br>Outliers: %{y}'
+    ))
+    fig_timeline.update_layout(title='Outlier Events Timeline', xaxis_title='Date', yaxis_title='Outlier Count')
+    
+    # 4. Comparative Period Analysis with Enhanced Yearly Box Plot
+    yearly_comparison = px.box(outliers_over_time, 
+                               x='year', 
+                               y='outlier_count',
+                               title='Yearly Outlier Distribution',
+                               labels={'year': 'Year', 'outlier_count': 'Outlier Count'})
+    
+    # 5. Temporal Heatmap with Improved Readability
+    heatmap_data = outliers_over_time.pivot_table(
+        index='year',
+        columns='month',
+        values='outlier_count',
+        aggfunc='sum'
+    ).fillna(0)
+    
+    fig_heatmap = px.imshow(heatmap_data,
+                            title='Outlier Count by Month and Year',
+                            labels=dict(x='Month', y='Year', color='Outlier Count'),
+                            color_continuous_scale='Viridis',
+                            aspect='auto')
+    fig_heatmap.update_layout(coloraxis_colorbar=dict(title="Count", tickvals=[0, 20, 40, 60, 80]))
+
+    
+    return {
+        'timeseries': fig_timeseries,
+        'seasonal': fig_seasonal,
+        'timeline': fig_timeline,
+        'yearly': yearly_comparison,
+        'heatmap': fig_heatmap
+    }
+
+
+
+def analyze_outlier_characteristics(normal_data, outliers, feature_columns):
+    """
+    Analyze what makes outliers different from normal points
+    
+    Args:
+        normal_data: DataFrame with non-outlier points
+        outliers: DataFrame with outlier points
+        feature_columns: List of features to analyze
+    """
+
+    # 1. Calculate z-scores for outliers
+    normal_stats = normal_data[feature_columns].agg(['mean', 'std'])
+    z_scores = (outliers[feature_columns] - normal_stats.loc['mean']) / normal_stats.loc['std']
+    
+    # 2. Find most extreme features for each outlier
+    extreme_features = pd.DataFrame({
+        'Feature': z_scores.abs().idxmax(axis=1),
+        'Z-Score': z_scores.abs().max(axis=1)
+    })
+    
+    # 3. Feature importance based on frequency of extreme values
+    feature_importance = extreme_features['Feature'].value_counts()
+    
+    # 4. Distribution comparison plots with two plots per row and increased vertical space
+    n_rows = (len(feature_columns) + 1) // 2  # Calculate number of rows needed for 2 plots per row
+    fig, axes = plt.subplots(n_rows, 2, figsize=(14, 5.5 * n_rows))  # Adjust horizontal and vertical spacing
+    
+    # Flatten axes array for easy indexing
+    axes = axes.flatten()
+    
+    for i, feature in enumerate(feature_columns):
+        sns.kdeplot(data=normal_data[feature], ax=axes[i], label='Normal', alpha=0.5)
+        sns.kdeplot(data=outliers[feature], ax=axes[i], label='Outliers', alpha=0.5)
+        axes[i].set_title(f'Distribution of {feature}')
+        axes[i].legend()
+    
+    # Hide any unused axes
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+    
+    # 5. Summary statistics
+    summary = pd.DataFrame({
+        'Normal_Mean': normal_data[feature_columns].mean(),
+        'Normal_Std': normal_data[feature_columns].std(),
+        'Outlier_Mean': outliers[feature_columns].mean(),
+        'Outlier_Std': outliers[feature_columns].std(),
+        'Mean_Diff_Sigma': (outliers[feature_columns].mean() - normal_data[feature_columns].mean()) / normal_data[feature_columns].std()
+    })
+    
+    plt.subplots_adjust(hspace=0.5)  # Increase vertical spacing between rows
+    
+    return {
+        'extreme_features': extreme_features,
+        'feature_importance': feature_importance,
+        'summary_stats': summary,
+        'distribution_plot': fig
+    }
