@@ -118,36 +118,12 @@ def visualize_outliers_3d(df: pd.DataFrame, lof_scores: np.ndarray, mask: np.nda
         # Add grid
         ax2.grid(True, alpha=0.3)
         
-        # Add rotation animation
-        def rotate(angle):
-            ax1.view_init(azim=angle)
-            ax2.view_init(azim=angle)
-            plt.draw()
-        
-        # Function to update the view angle
-        def on_key_press(event):
-            if event.key == 'left':
-                rotate(ax1.azim - 5)
-            elif event.key == 'right':
-                rotate(ax1.azim + 5)
-            elif event.key == 'up':
-                ax1.view_init(elev=ax1.elev + 5)
-                ax2.view_init(elev=ax2.elev + 5)
-                plt.draw()
-            elif event.key == 'down':
-                ax1.view_init(elev=ax1.elev - 5)
-                ax2.view_init(elev=ax2.elev - 5)
-                plt.draw()
-        
-        # Connect the key press event
-        fig.canvas.mpl_connect('key_press_event', on_key_press)
-        
+       
         # Set initial view angle
         ax1.view_init(elev=20, azim=45)
         ax2.view_init(elev=20, azim=45)
         
         print(f"Variance explained by 3 PCs: {sum(variance_ratio):.1%}")
-
     
         
         plt.show()
@@ -191,6 +167,8 @@ def parallel_lof_scoring(params: LOFParams, X: np.ndarray) -> Tuple[float, LOFPa
             n_jobs=-1  # Parallel processing
         ))
     ])
+
+    print(f"Processing params: {params}")
 
     # 2. Improve score calculation
     pipeline.fit(X)

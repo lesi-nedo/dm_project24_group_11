@@ -102,28 +102,7 @@ def visualize_isolation_forest_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, 
         # Add colorbar
         plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
         
-        # Add rotation controls
-        def rotate(angle):
-            ax1.view_init(azim=angle)
-            ax2.view_init(azim=angle)
-            plt.draw()
-        
-        def on_key_press(event):
-            if event.key == 'left':
-                rotate(ax1.azim - 5)
-            elif event.key == 'right':
-                rotate(ax1.azim + 5)
-            elif event.key == 'up':
-                ax1.view_init(elev=ax1.elev + 5)
-                ax2.view_init(elev=ax2.elev + 5)
-                plt.draw()
-            elif event.key == 'down':
-                ax1.view_init(elev=ax1.elev - 5)
-                ax2.view_init(elev=ax2.elev - 5)
-                plt.draw()
-        
-        fig.canvas.mpl_connect('key_press_event', on_key_press)
-        
+       
         # Set initial view angle
         ax1.view_init(elev=20, azim=45)
         ax2.view_init(elev=20, azim=45)
@@ -132,7 +111,7 @@ def visualize_isolation_forest_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, 
         print("\nInteractive Controls:")
         print("- Use arrow keys to rotate and tilt the plots")
         print("- Close the plot window to exit")
-        
+ 
         plt.show()
 
 
@@ -157,6 +136,8 @@ def parallel_iforest_scoring(params: IForestParams, X: np.ndarray) -> Tuple[floa
             bootstrap=params.bootstrap
         ))
     ])
+
+    print(f"Processing params: {params}")
     
     pipeline.fit(X)
     scores = pipeline.named_steps['iforest'].decision_function(X) + 0.5

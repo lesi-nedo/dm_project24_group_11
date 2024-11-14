@@ -33,7 +33,7 @@ def update_legend_marker_size(handle, orig):
 def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mask: np.ndarray) -> None:
     """Create enhanced 3D visualizations for OneClassSVM outlier detection results."""
     with plt.style.context('seaborn-v0_8-whitegrid'):
-        fig = plt.figure(figsize=(20, 8))
+        fig = plt.figure(figsize=(20, 8),  constrained_layout=True)
         gs = plt.GridSpec(1, 2, figure=fig, wspace=0.3)
         
         # Separate outliers and inliers
@@ -102,6 +102,10 @@ def visualize_one_class_svm_3d(df: pd.DataFrame, anomaly_scores: np.ndarray, mas
         ax2.set_zlabel('PC3')
         ax2.set_title('3D Anomaly Score Distribution', pad=20)
         ax2.grid(True, alpha=0.3)
+
+        # Set initial view angle
+        ax1.view_init(elev=20, azim=45)
+        ax2.view_init(elev=20, azim=45)
         
         # Add colorbar
         plt.colorbar(scatter, ax=ax2, label='Anomaly Score', alpha=0.7)
