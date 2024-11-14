@@ -2,6 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import plotly.express as px
+
+
+from sklearn.decomposition import PCA
 
 from typing import Dict
 
@@ -153,3 +157,131 @@ def plot_kdes(df_dicts: dict[str, pd.DataFrame], figsize: tuple = (18, 6), title
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust to prevent title overlap
     plt.show()
     plt.close()
+
+
+
+
+
+
+def visualize_outliers_3d(data, lof_set, iso_set, oc_svm_set):
+    """
+    Reduce dimensionality of data using PCA and create a 3D visualization of outliers
+    detected by different algorithms.
+    
+    Parameters:
+    -----------
+    data : pandas.DataFrame
+        Original dataset containing all features
+    lof_set : set
+        Set of indices for outliers detected by LOF
+    iso_set : set
+        Set of indices for outliers detected by Isolation Forest
+    oc_svm_set : set
+        Set of indices for outliers detected by One-Class SVM
+        
+    Returns:
+    --------
+    fig : plotly.graph_objects.Figure
+        Interactive 3D scatter plot
+    """
+    # Perform PCA
+    pca = PCA(n_components=3)
+    data_pca = pca.fit_transform(data)
+    
+    # Create a DataFrame with PCA components
+    pca_df = pd.DataFrame(
+        data_pca, 
+        columns=['PC1', 'PC2', 'PC3'],
+        index=data.index
+    )
+    
+    # Calculate intersections and unique points
+    all_outliers = lof_set | iso_set | oc_svm_set
+    lof_iso = lof_set & iso_set
+    lof_oc_svm = lof_set & oc_svm_set
+    iso_oc_svm = iso_set & oc_svm_set
+    all_common = lof_set & iso_set & oc_svm_set
+    
+    # Create category labels for each point
+    categories = []
+    for idx in data.index:
+        if idx in all_common:
+            categories.append('Detected by All')
+        elif idx in lof_iso:
+            categories.append('LOF & IsoForest')
+        elif idx in lof_oc_svm:
+            categories.append('LOF & OC-SVM')
+        elif idx in iso_oc_svm:
+            categories.append('IsoForest & OC-SVM')
+        elif idx in lof_set:
+            categories.append('LOF only')
+        elif idx in iso_set:
+            categories.append('IsoForest only')
+        elif idx in oc_svm_set:
+            categories.append('OC-SVM only')
+        else:
+            categories.append('Normal')
+    
+
+    pca_df['Category'] = categories
+    
+    # Create color scheme
+    color_discrete_map = {
+        'Detected by All': '#FF0000',      # Red
+        'LOF & IsoForest': '#FFA500',      # Orange
+        'LOF & OC-SVM': '#FFFF00',         # Yellow
+        'IsoForest & OC-SVM': '#800080',   # Purple
+        'LOF only': '#0000FF',             # Blue
+        'IsoForest only': '#008000',       # Green
+        'OC-SVM only': '#000000',          # Black
+        'Normal': '#808080'                # Gray
+    }
+    
+    # Create 3D scatter plot
+    fig = px.scatter_3d(
+        pca_df,
+        x='PC1',
+        y='PC2',
+        z='PC3',
+        color='Category',
+        color_discrete_map=color_discrete_map,
+        title='3D Visualization of Outliers (PCA)',
+        labels={
+            'PC1': f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)',
+            'PC2': f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)',
+            'PC3': f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)'
+        }
+    )
+    
+    # Update layout for better visualization
+    fig.update_traces(marker=dict(size=5))
+    fig.update_layout(
+        legend_title_text='Detection Category',
+        scene=dict(
+            xaxis_title='PC1',
+            yaxis_title='PC2',
+            zaxis_title='PC3'
+        )
+    )
+    
+    return fig, pca_df
+
+def print_summary_statistics(lof_set, iso_set, oc_svm_set):
+    """
+    Print summary statistics about the outliers detected by each algorithm
+    and their intersections.
+    """
+    all_common = lof_set & iso_set & oc_svm_set
+    lof_iso = lof_set & iso_set
+    lof_oc_svm = lof_set & oc_svm_set
+    iso_oc_svm = iso_set & oc_svm_set
+    
+    print("Summary Statistics:")
+    print(f"Total outliers detected by LOF: {len(lof_set)}")
+    print(f"Total outliers detected by Isolation Forest: {len(iso_set)}")
+    print(f"Total outliers detected by OC-SVM: {len(oc_svm_set)}")
+    print("\nIntersections:")
+    print(f"Detected by all three methods: {len(all_common)}")
+    print(f"Common between LOF and IsoForest: {len(lof_iso)}")
+    print(f"Common between LOF and OC-SVM: {len(lof_oc_svm)}")
+    print(f"Common between IsoForest and OC-SVM: {len(iso_oc_svm)}")
