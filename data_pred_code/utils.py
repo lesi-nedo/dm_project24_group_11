@@ -232,7 +232,7 @@ def preprocess_helper_imputer(races, pred_features ):
             non_nan_data = races[feature].dropna()
             if len(non_nan_data) > 0:
                 skewness = non_nan_data.skew()
-                if abs(skewness) > 1:
+                if np.abs(skewness) > 1:
                     imputed_data = median_imputer.fit_transform(feature_data)
                 else:
                     imputed_data = mean_imputer.fit_transform(feature_data)

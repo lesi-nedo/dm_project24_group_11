@@ -1,6 +1,0 @@
-dataset/races_filled.csv filter=lfs diff=lfs merge=lfs -text
-dataset/engineered_df.csv filter=lfs diff=lfs merge=lfs -text
-dataset/races.csv filter=lfs diff=lfs merge=lfs -text
-dataset/races_updated.csv filter=lfs diff=lfs merge=lfs -text
-. !text !filter !merge !diff
-* !text !filter !merge !diff
