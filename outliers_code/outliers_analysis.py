@@ -81,9 +81,7 @@ def plot_outlier_scores(z_score_lof: np.ndarray,
     ax6.set_xlabel('Isolation Forest Z-Score')
     ax6.set_ylabel('One-Class SVM Z-Score')
     
-    plt.tight_layout()
-    plt.show()
-    plt.close()
+    return fig
 
 def plot_z_score_distributions(z_scores_dict: Dict[str, np.ndarray], 
                              figsize: tuple = (15, 5),
@@ -127,9 +125,7 @@ def plot_z_score_distributions(z_scores_dict: Dict[str, np.ndarray],
     
     plt.suptitle(title)
     plt.tight_layout()
-    plt.show()
-    plt.close()
-
+    return fig
 
 def plot_kdes(df_dicts: dict[str, pd.DataFrame], figsize: tuple = (18, 6), title="KDE Plot of the Data"):
     fig, axes = plt.subplots(1, len(df_dicts), figsize=figsize)
@@ -273,7 +269,7 @@ def visualize_outliers_3d(data, lof_set, iso_set, oc_svm_set):
 
 
 
-def analyze_outlier_types(data, outlier_indices, min_races_threshold=5):
+def analyze_outlier_types(data, outlier_indices, min_races_threshold=1):
     """
     Analyze whether outliers are primarily associated with specific cyclists or races.
     
@@ -324,7 +320,7 @@ def analyze_outlier_types(data, outlier_indices, min_races_threshold=5):
     
     # If a cyclist/race has more than 50% of their entries as outliers,
     # consider them systematic outliers
-    threshold = 0.5
+    threshold = 0.2
     
     for idx in outlier_indices:
         cyclist = data.loc[idx, 'cyclist']
@@ -345,7 +341,7 @@ def analyze_outlier_types(data, outlier_indices, min_races_threshold=5):
         'race_ratios': race_ratios
     }
 
-def visualize_outlier_types(data, lof_set, iso_set, oc_svm_set, min_races_threshold=5, sample_size=8000, random_state=42):
+def visualize_outlier_types(data, all_outliers_indx, min_races_threshold=5, sample_size=8000, random_state=42):
     """
     Create separate visualizations for cyclist and race outliers.
     
@@ -363,22 +359,23 @@ def visualize_outlier_types(data, lof_set, iso_set, oc_svm_set, min_races_thresh
     tuple : (cyclist_fig, race_fig, summary_dict)
     """
     # Combine all outliers
-    all_outliers = lof_set.union(iso_set).union(oc_svm_set)
-    all_outliers_set = set(all_outliers)
+
+    len_outliers = len(all_outliers_indx)
+    len_data = len(data)
     
     # Analyze outlier types using full dataset
-    outlier_analysis = analyze_outlier_types(data, all_outliers, min_races_threshold)
+    outlier_analysis = analyze_outlier_types(data, all_outliers_indx, min_races_threshold)
     cyclist_outliers = outlier_analysis['cyclist_outliers']
     race_outliers = outlier_analysis['race_outliers']
     
     # Sample indices while preserving outlier proportions
-    normal_indices = set(range(len(data))) - all_outliers_set
-    n_outliers = min(len(all_outliers), int(sample_size * len(all_outliers) / len(data)))
+    normal_indices = set(range(len_data)) - all_outliers_indx
+    n_outliers = min(len_outliers, int(sample_size * len_outliers / len_data))
     n_normal = sample_size - n_outliers
     
     np.random.seed(random_state)
     sampled_normal = set(np.random.choice(list(normal_indices), n_normal, replace=False))
-    sampled_indices = list(sampled_normal.union(all_outliers))
+    sampled_indices = list(sampled_normal.union(all_outliers_indx))
     
     # Sample data
     sampled_data = data.iloc[sampled_indices].copy()
@@ -414,62 +411,57 @@ def visualize_outlier_types(data, lof_set, iso_set, oc_svm_set, min_races_thresh
     pca_df.loc[list(race_outliers), 'Race_Category'] = 'Race Outlier'
 
     with plt.style.context('seaborn-v0_8-whitegrid'):
-        fig = plt.figure(figsize=(12, 6), constrained_layout=True)
-
+        fig = plt.figure(figsize=(10, 8), constrained_layout=True)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot normal points first
+        mask_normal = (pca_df['Cyclist_Category'] == 'Normal') & (pca_df['Race_Category'] == 'Normal')
+        ax.scatter(
+            pca_df[mask_normal]['PC1'],
+            pca_df[mask_normal]['PC2'],
+            pca_df[mask_normal]['PC3'],
+            c='#808080',
+            label='Normal'
+        )
+        
+        # Plot cyclist outliers if they exist
         if len(cyclist_outliers) > 0:
-            ax1 = fig.add_subplot(121, projection='3d')
-            
-            # Create cyclist outliers visualization
-            for category in ['Normal', 'Cyclist Outlier']:
-                mask = pca_df['Cyclist_Category'] == category
-                color = '#FF0000' if category == 'Cyclist Outlier' else '#808080'
-                ax1.scatter(
-                    pca_df[mask]['PC1'],
-                    pca_df[mask]['PC2'], 
-                    pca_df[mask]['PC3'],
-                    c=color,
-                    label=category
-                )
-            
-            ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
-            ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
-            ax1.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
-            ax1.set_title('Cyclist-related Outliers (PCA)')
-            ax1.legend()
-            ax1.view_init(elev=20, azim=45)
-
-
-        elif len(race_outliers) > 0:
-
-            ax2 = fig.add_subplot(122, projection='3d')
-            
-            # Create race outliers visualization
-            for category in ['Normal', 'Race Outlier']:
-                mask = pca_df['Race_Category'] == category
-                color = '#0000FF' if category == 'Race Outlier' else '#808080'
-                ax2.scatter(
-                    pca_df[mask]['PC1'],
-                    pca_df[mask]['PC2'],
-                    pca_df[mask]['PC3'],
-                    c=color,
-                    label=category
-                )
-            
-            ax2.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
-            ax2.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
-            ax2.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
-            ax2.set_title('Race-related Outliers (PCA)')
-            ax2.legend()
-            ax2.view_init(elev=20, azim=45)
-        else:
+            mask_cyclist = pca_df['Cyclist_Category'] == 'Cyclist Outlier'
+            ax.scatter(
+                pca_df[mask_cyclist]['PC1'],
+                pca_df[mask_cyclist]['PC2'],
+                pca_df[mask_cyclist]['PC3'],
+                c='#FF0000',
+                label='Cyclist Outlier'
+            )
+        
+        # Plot race outliers if they exist
+        if len(race_outliers) > 0:
+            mask_race = pca_df['Race_Category'] == 'Race Outlier'
+            ax.scatter(
+                pca_df[mask_race]['PC1'],
+                pca_df[mask_race]['PC2'],
+                pca_df[mask_race]['PC3'],
+                c='#0000FF',
+                label='Race Outlier'
+            )
+        
+        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
+        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
+        ax.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
+        ax.set_title('PCA Outlier Analysis')
+        ax.legend()
+        ax.view_init(elev=20, azim=45)
+        
+        if len(cyclist_outliers) == 0 and len(race_outliers) == 0:
             print("No cyclist nor race outliers detected in the sample")
     
     # Prepare summary statistics
     summary = {
-        'total_outliers': len(all_outliers),
+        'total_outliers': len_outliers,
         'cyclist_outliers': len(cyclist_outliers),
         'race_outliers': len(race_outliers),
-        'unclassified_outliers': len(all_outliers_set - cyclist_outliers - race_outliers),
+        'unclassified_outliers': len(all_outliers_indx - cyclist_outliers - race_outliers),
         'top_cyclist_outliers': sorted(
             outlier_analysis['cyclist_ratios'].items(),
             key=lambda x: x[1],
@@ -628,3 +620,150 @@ def analyze_outlier_characteristics(normal_data, outliers, feature_columns):
         'summary_stats': summary,
         'distribution_plot': fig
     }
+
+
+
+
+def plot_statistical_comparison(outlier_mean, non_outlier_mean, 
+                              effect_size, outlier_std, non_outlier_std, 
+                              figsize=(13, 7)):
+    """
+    Create plots comparing means and standard deviations for each feature.
+    Each metric gets its own row with mean comparison and std deviation side by side.
+    """
+    metrics = outlier_mean.index
+    n_metrics = len(metrics)
+
+    fig = plt.figure(figsize=[10, 4])
+    gs = fig.add_gridspec(1)
+    ax1 = fig.add_subplot(gs[0])
+
+    x = np.arange(len(metrics))
+    width = 0.35
+    
+    # 1. Effect Size Plot
+    effect_bars = ax1.bar(x, effect_size, width, color='#99cc99')
+    ax1.set_title('Effect Size')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(metrics, rotation=45, ha='right')
+    ax1.grid(True, alpha=0.3)
+    fig.show()
+    # Create figure with subplots - one row per metric, two columns
+    fig, axes = plt.subplots(n_metrics, 2, figsize=figsize, constrained_layout=True)
+
+    
+    
+    # If there's only one metric, axes needs to be 2D
+    if n_metrics == 1:
+        axes = axes.reshape(1, -1)
+    
+   
+    x = np.array([0, 1])  # Just two bars per plot
+    
+    # Create plots for each metric
+    for idx, metric in enumerate(metrics):
+        metric_label = metric.replace('_', ' ').title()
+        # Mean comparison plot
+        mean_ax = axes[idx, 0]
+        mean_bars1 = mean_ax.bar(x[0], outlier_mean[metric], width, 
+                                label='Outlier', color='#ff9999')
+        mean_bars2 = mean_ax.bar(x[1], non_outlier_mean[metric], width, 
+                                label='Non-outlier', color='#66b3ff')
+        mean_ax.set_title(f'{metric_label} - Mean Comparison')
+        mean_ax.set_xticks(x)
+        mean_ax.set_xticklabels(['Outlier', 'Non-outlier'])
+        mean_ax.legend()
+        mean_ax.grid(True, alpha=0.3)
+            
+        
+        # Standard deviation plot
+        std_ax = axes[idx, 1]
+        std_bars1 = std_ax.bar(x[0], outlier_std[metric], width, 
+                              label='Outlier', color='#3366cc')
+        std_bars2 = std_ax.bar(x[1], non_outlier_std[metric], width, 
+                              label='Non-outlier', color='#ff6600')
+        std_ax.set_title(f'{metric_label} - Standard Deviation')
+        std_ax.set_xticks(x)
+        std_ax.set_xticklabels(['Outlier', 'Non-outlier'])
+        std_ax.legend()
+        std_ax.grid(True, alpha=0.3)
+        
+        # Add value labels on top of bars for both plots
+        for ax in [mean_ax, std_ax]:
+            bars = ax.containers[0]  # Get the bars
+            ax.bar_label(bars, fmt='%.2f', padding=3)
+    
+    plt.suptitle('Feature Comparison: Outliers vs Non-outliers', y=1.02, fontsize=14)
+    return fig
+
+def visualize_stats(stats_dict):
+    """
+    Create visualization from the statistics dictionary.
+    """
+    fig = plot_statistical_comparison(
+        outlier_mean=stats_dict['outlier_mean'],
+        non_outlier_mean=stats_dict['non_outlier_mean'],
+        effect_size=stats_dict['effect_size'],
+        outlier_std=stats_dict['outlier_std'],
+        non_outlier_std=stats_dict['non_outlier_std']
+    )
+    return fig
+
+
+def analyze_correlation_differences(corr_matrix1, corr_matrix2, columns_of_interest):
+    """
+    Analyze and visualize differences between two correlation matrices.
+    
+    Parameters:
+    corr_matrix1: First correlation matrix (with outliers)
+    corr_matrix2: Second correlation matrix (without outliers)
+    columns_of_interest: List of column names
+    """
+    # Calculate absolute differences between matrices
+    diff_matrix = np.abs(corr_matrix1 - corr_matrix2)
+    
+    # Create a DataFrame for easier handling
+    diff_df = pd.DataFrame(diff_matrix, 
+                          index=columns_of_interest,
+                          columns=columns_of_interest)
+    
+    # Get the top differences (excluding diagonal)
+    np.fill_diagonal(diff_matrix, 0)  # Zero out diagonal
+    
+    # Find the largest differences
+    flat_indices = np.argwhere(diff_matrix == np.max(diff_matrix))[0]
+    max_diff = diff_matrix[flat_indices[0], flat_indices[1]]
+    feature1 = columns_of_interest[flat_indices[0]]
+    feature2 = columns_of_interest[flat_indices[1]]
+    
+    # Create heatmap of differences
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(diff_df, 
+                annot=True, 
+                cmap='YlOrRd',
+                fmt='.2f',
+                center=0)
+    plt.title('Absolute Differences Between Correlation Matrices')
+    
+    return {
+        'max_difference': max_diff,
+        'feature_pair': (feature1, feature2),
+        'diff_matrix': diff_df
+    }
+
+def compare_correlations(df_with_outliers, df_without_outliers, columns_of_interest):
+    """
+    Compare correlation matrices for datasets with and without outliers.
+    """
+    # Calculate correlation matrices
+    corr_with_outliers = df_with_outliers[columns_of_interest].corr()
+    corr_without_outliers = df_without_outliers[columns_of_interest].corr()
+    
+    # Analyze differences
+    results = analyze_correlation_differences(
+        corr_with_outliers.values,
+        corr_without_outliers.values,
+        columns_of_interest
+    )
+    
+    return results
