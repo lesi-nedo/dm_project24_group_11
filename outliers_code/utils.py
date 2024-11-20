@@ -1,4 +1,7 @@
+import pandas as pd
+
 from fastai.tabular.all import TabularPandas, Categorify, Normalize
+
 
 
 def encode_tabular_data(dataset, cat_features, cont_features):
@@ -53,4 +56,61 @@ def encode_tabular_data(dataset, cat_features, cont_features):
     
     return df_encoded
 
-__all__ = ['encode_tabular_data']
+
+def get_races_outliers(MergedDataset: pd.DataFrame, all_outliers: pd.DataFrame) -> pd.DataFrame:
+    al_races_outliers = all_outliers.groupby('name_race').size().reset_index(name='count').sort_values(by=["name_race"], ascending=False)
+    all_part_out_race = MergedDataset[MergedDataset['name_race'].isin(all_outliers['name_race'])].groupby(["name_race"]).size().reset_index(name='count').sort_values(by=["name_race"], ascending=False)
+
+
+    races_outliers = al_races_outliers[(al_races_outliers['name_race'] == all_part_out_race['name_race']) & ((al_races_outliers['count'] / all_part_out_race['count']) > 0.5)]
+
+    return races_outliers 
+
+
+def get_cyclists_outliers(MergedDataset: pd.DataFrame, all_outliers: pd.DataFrame) -> pd.DataFrame:
+    al_cyclists_outliers = all_outliers.groupby('name_cyclist').size().reset_index(name='count').sort_values(by=["name_cyclist"], ascending=False)
+    all_part_out_cyclist = MergedDataset[MergedDataset['name_cyclist'].isin(all_outliers['name_cyclist'])].groupby(["name_cyclist"]).size().reset_index(name='count').sort_values(by=["name_cyclist"], ascending=False)
+
+
+    cyclists_outliers = al_cyclists_outliers[(al_cyclists_outliers['name_cyclist'] == all_part_out_cyclist['name_cyclist']) & ((al_cyclists_outliers['count'] / all_part_out_cyclist['count']) > 0.5)]
+
+    return cyclists_outliers
+
+
+def get_cleaned_dataset() -> pd.DataFrame:
+    # Load outliers
+    outliers_files = ["dataset/outliers_lof.csv", "dataset/outliers_iso_for.csv", "dataset/outliers_oc_svm.csv"]
+    all_outliers = pd.concat([pd.read_csv(file) for file in outliers_files]).drop_duplicates(subset=['name_race', 'name_cyclist'])
+
+    # Load datasets
+    DatasetCyclists = pd.read_csv("dataset/cyclists_filled.csv")
+    DatasetRaces = pd.read_csv("dataset/races_filled.csv")
+
+    # Merge datasets
+    MergedDataset = DatasetRaces.merge(DatasetCyclists, left_on='cyclist', right_on='_url', how='inner')
+    MergedDataset.rename(columns={"_url_y": "name_cyclist", "_url_x": "name_race"}, inplace=True)
+    MergedDataset.drop(columns=['cyclist', 'name_x', 'name_y'], inplace=True)
+
+    # Get outliers
+    races_outliers = get_races_outliers(MergedDataset, all_outliers)
+    cyclist_outliers = get_cyclists_outliers(MergedDataset, all_outliers)
+
+    # Remove outliers
+    DatasetCyclists = DatasetCyclists[~DatasetCyclists['_url'].isin(cyclist_outliers['name_cyclist'].unique())]
+    DatasetRaces = DatasetRaces[~DatasetRaces["_url"].isin(races_outliers['name_race'].unique())]
+
+    # Merge datasets again
+    MergedDataset = DatasetRaces.merge(DatasetCyclists, left_on='cyclist', right_on='_url', how='inner')
+    MergedDataset.rename(columns={"_url_y": "name_cyclist", "_url_x": "name_race"}, inplace=True)
+    MergedDataset.drop(columns=['cyclist', 'name_x', 'name_y'], inplace=True)
+
+    return MergedDataset
+   
+    
+
+__all__ = [
+    'encode_tabular_data'
+    'get_races_outliers',
+    'get_cyclists_outliers',
+    'get_cleaned_dataset'
+    ]
