@@ -3,7 +3,7 @@ import seaborn
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-
+import seaborn as sns
 from scipy import stats
 
 
@@ -267,6 +267,66 @@ def radar_plot(data, title, names, attributes):
     
     return fig
 
+
+def analyze_correlation_differences(corr_matrix1, corr_matrix2, columns_of_interest):
+    """
+    Analyze and visualize differences between two correlation matrices.
+    
+    Parameters:
+    corr_matrix1: First correlation matrix (with outliers)
+    corr_matrix2: Second correlation matrix (without outliers)
+    columns_of_interest: List of column names
+    """
+    # Calculate absolute differences between matrices
+    diff_matrix = np.abs(corr_matrix1 - corr_matrix2)
+    
+    # Create a DataFrame for easier handling
+    diff_df = pd.DataFrame(diff_matrix, 
+                          index=columns_of_interest,
+                          columns=columns_of_interest)
+    
+    # Get the top differences (excluding diagonal)
+    np.fill_diagonal(diff_matrix, 0)  # Zero out diagonal
+    
+    # Find the largest differences
+    flat_indices = np.argwhere(diff_matrix == np.max(diff_matrix))[0]
+    max_diff = diff_matrix[flat_indices[0], flat_indices[1]]
+    feature1 = columns_of_interest[flat_indices[0]]
+    feature2 = columns_of_interest[flat_indices[1]]
+    
+    # Create heatmap of differences
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(diff_df, 
+                annot=True, 
+                cmap='YlOrRd',
+                fmt='.2f',
+                center=0)
+    plt.title('Absolute Differences Between Correlation Matrices')
+    
+    return {
+        'max_difference': max_diff,
+        'feature_pair': (feature1, feature2),
+        'diff_matrix': diff_df
+    }
+
+def compare_correlations(df_with_outliers, df_without_outliers, columns_of_interest):
+    """
+    Compare correlation matrices for datasets with and without outliers.
+    """
+    # Calculate correlation matrices
+    corr_with_outliers = df_with_outliers[columns_of_interest].corr()
+    corr_without_outliers = df_without_outliers[columns_of_interest].corr()
+    
+    # Analyze differences
+    results = analyze_correlation_differences(
+        corr_with_outliers.values,
+        corr_without_outliers.values,
+        columns_of_interest
+    )
+    
+    return results
+
+
 __all__ = [
     'create_correlation_matrix',
     'display_top_correlations',
@@ -275,6 +335,7 @@ __all__ = [
     'calc_group_correlations',
     'analyze_cyclist_progression',
     'analyze_performance_peaks',
-    'radar_plot'
+    'radar_plot',
+    'compare_correlations'
 
 ]

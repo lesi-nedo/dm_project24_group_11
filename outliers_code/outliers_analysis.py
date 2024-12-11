@@ -269,7 +269,7 @@ def visualize_outliers_3d(data, lof_set, iso_set, oc_svm_set):
 
 
 
-def analyze_outlier_types(data, outlier_indices, min_races_threshold=5):
+def analyze_outlier_types(data, outlier_indices, min_races_threshold=1):
     """
     Analyze whether outliers are primarily associated with specific cyclists or races.
     
@@ -320,7 +320,7 @@ def analyze_outlier_types(data, outlier_indices, min_races_threshold=5):
     
     # If a cyclist/race has more than 50% of their entries as outliers,
     # consider them systematic outliers
-    threshold = 0.5
+    threshold = 0.2
     
     for idx in outlier_indices:
         cyclist = data.loc[idx, 'cyclist']
@@ -411,54 +411,49 @@ def visualize_outlier_types(data, all_outliers_indx, min_races_threshold=5, samp
     pca_df.loc[list(race_outliers), 'Race_Category'] = 'Race Outlier'
 
     with plt.style.context('seaborn-v0_8-whitegrid'):
-        fig = plt.figure(figsize=(12, 6), constrained_layout=True)
-
+        fig = plt.figure(figsize=(10, 8), constrained_layout=True)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot normal points first
+        mask_normal = (pca_df['Cyclist_Category'] == 'Normal') & (pca_df['Race_Category'] == 'Normal')
+        ax.scatter(
+            pca_df[mask_normal]['PC1'],
+            pca_df[mask_normal]['PC2'],
+            pca_df[mask_normal]['PC3'],
+            c='#808080',
+            label='Normal'
+        )
+        
+        # Plot cyclist outliers if they exist
         if len(cyclist_outliers) > 0:
-            ax1 = fig.add_subplot(121, projection='3d')
-            
-            # Create cyclist outliers visualization
-            for category in ['Normal', 'Cyclist Outlier']:
-                mask = pca_df['Cyclist_Category'] == category
-                color = '#FF0000' if category == 'Cyclist Outlier' else '#808080'
-                ax1.scatter(
-                    pca_df[mask]['PC1'],
-                    pca_df[mask]['PC2'], 
-                    pca_df[mask]['PC3'],
-                    c=color,
-                    label=category
-                )
-            
-            ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
-            ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
-            ax1.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
-            ax1.set_title('Cyclist-related Outliers (PCA)')
-            ax1.legend()
-            ax1.view_init(elev=20, azim=45)
-
-
-        elif len(race_outliers) > 0:
-
-            ax2 = fig.add_subplot(122, projection='3d')
-            
-            # Create race outliers visualization
-            for category in ['Normal', 'Race Outlier']:
-                mask = pca_df['Race_Category'] == category
-                color = '#0000FF' if category == 'Race Outlier' else '#808080'
-                ax2.scatter(
-                    pca_df[mask]['PC1'],
-                    pca_df[mask]['PC2'],
-                    pca_df[mask]['PC3'],
-                    c=color,
-                    label=category
-                )
-            
-            ax2.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
-            ax2.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
-            ax2.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
-            ax2.set_title('Race-related Outliers (PCA)')
-            ax2.legend()
-            ax2.view_init(elev=20, azim=45)
-        else:
+            mask_cyclist = pca_df['Cyclist_Category'] == 'Cyclist Outlier'
+            ax.scatter(
+                pca_df[mask_cyclist]['PC1'],
+                pca_df[mask_cyclist]['PC2'],
+                pca_df[mask_cyclist]['PC3'],
+                c='#FF0000',
+                label='Cyclist Outlier'
+            )
+        
+        # Plot race outliers if they exist
+        if len(race_outliers) > 0:
+            mask_race = pca_df['Race_Category'] == 'Race Outlier'
+            ax.scatter(
+                pca_df[mask_race]['PC1'],
+                pca_df[mask_race]['PC2'],
+                pca_df[mask_race]['PC3'],
+                c='#0000FF',
+                label='Race Outlier'
+            )
+        
+        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} var)')
+        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} var)')
+        ax.set_zlabel(f'PC3 ({pca.explained_variance_ratio_[2]:.2%} var)')
+        ax.set_title('PCA Outlier Analysis')
+        ax.legend()
+        ax.view_init(elev=20, azim=45)
+        
+        if len(cyclist_outliers) == 0 and len(race_outliers) == 0:
             print("No cyclist nor race outliers detected in the sample")
     
     # Prepare summary statistics
@@ -712,5 +707,6 @@ def visualize_stats(stats_dict):
         outlier_std=stats_dict['outlier_std'],
         non_outlier_std=stats_dict['non_outlier_std']
     )
-    fig.show()
     return fig
+
+
