@@ -13,6 +13,8 @@ import os
 import matplotlib.pyplot as plt
 import sys
 import datetime
+import plotly.express as px
+import plotly.graph_objects as go
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
 
@@ -23,10 +25,17 @@ from ray import train, tune
 from ray.train import Checkpoint
 from ray.tune.schedulers import ASHAScheduler
 from pathlib import Path
+from IPython.display import display
+
 
 from sklearn.model_selection import KFold
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
+
+from typing import Optional, Tuple
+
+
 
 from functools import partial
 
@@ -176,12 +185,8 @@ def train_autoencoder(
     data_input = OurDataset(dataset_path)
 
     torch.set_float32_matmul_precision('medium')
-
-
     
-    model_save_dir = os.path.join(DEFAULT_ROOT_DIR, "autoencoder")
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f"autoencoder-{latent_dim}-{num_hidden_layers}-{timestamp}"
     
     # Create KFold object with stratification based on data distribution
     kfold = KFold(n_splits=num_folds, shuffle=True)
@@ -306,6 +311,69 @@ def train_autoencoder(
         train.report(metrics=final_metrics, checkpoint=checkpoint)
             
     return final_metrics   
+
+def final_train_autoencoder(configs: dict):
+    latent_dim = configs["latent_dim"]
+    scale_factor = configs["scale_factor"]
+    act_fn = configs["act_fn"]
+    dropout = configs.get("dropout", None)
+    batch_size = configs["batch_size"]
+    optimizer = configs["optimizer"]
+    lr_scheduler = configs["lr_scheduler"]
+    dataset_path = configs["dataset_path"]
+    monitor = configs["monitor"]
+    noise = configs["noise"]
+    noise_level = configs["noise_level"]
+    optimizer_configs = configs["optimizer_configs"]
+    lr_scheduler_configs = configs["lr_scheduler_configs"]
+    max_epochs = configs["max_epochs"]
+    trainer_config = configs["trainer_config"]
+
+
+    torch.set_float32_matmul_precision('medium')
+
+    num_hidden_layers = len(scale_factor)
+    data_input = OurDataset(dataset_path)
+
+    model_save_dir = os.path.join(DEFAULT_ROOT_DIR, "autoencoder")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"autoencoder-{latent_dim}-{num_hidden_layers}-{timestamp}"
+
+    train_loader = DataLoader(data_input.to_tensor(), batch_size=batch_size, num_workers=5, shuffle=True)
+
+    callbacks = [
+        LearningRateMonitor(logging_interval="epoch"),
+        EarlyStopping(
+            monitor=monitor,
+            patience=5,
+            mode="min",
+            verbose=False
+        ),
+    ]
+
+    autoencoder = Autoencoder(
+        data_input.shape[1], latent_dim,
+        scale_factor, act_fn, optimizer, optimizer_configs, dropout,
+        lr_scheduler, lr_scheduler_configs, monitor,
+        noise, noise_level
+    )
+
+
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        callbacks=callbacks,
+        **trainer_config
+    )
+
+    trainer.fit(autoencoder, train_loader)
+
+    # Save model
+
+    model_save_path = os.path.join(model_save_dir, f"{file_name}.pt")
+    torch.save(autoencoder.state_dict(), model_save_path)
+
+    
+
     
 def train_wrapper_autoencoder(configs: dict, args_dict: dict):
     optimizer = configs["optimizer"]
@@ -465,4 +533,81 @@ def main_autoencoder(num_samples=25, max_num_epochs=50):
     print(f"Best checkpoint path: {best_checkpoint}")
 
     return best_trial, best_config, best_checkpoint
+
+
+
+def visualize_latent_space_interactive(
+    encoder: torch.nn.Module,
+    data: torch.Tensor,
+    labels: Optional[torch.Tensor] = None,
+    feature_names: Optional[list] = None,
+    title: str = "Latent Space Visualization",
+    point_size: int = 5,
+    opacity: float = 0.7,
+    save_path: Optional[str] = None
+) -> go.Figure:
+    """
+    Simplified interactive visualization of latent space representations using Plotly.
+    """
+    encoder.eval()
+    with torch.no_grad():
+        latent_repr = encoder(data).cpu().numpy()
+
+    if labels is not None:
+        labels = labels.cpu().numpy()
+
+    if feature_names is None:
+        feature_names = [f"Feature {i}" for i in range(latent_repr.shape[1])]
+
+    hover_text = [
+        "<br>".join([f"{n}: {v:.3f}" for n, v in zip(feature_names, pt)])
+        for pt in latent_repr
+    ]
+
+    dim = latent_repr.shape[1]
+    if dim == 2:
+        fig = px.scatter(
+            x=latent_repr[:, 0],
+            y=latent_repr[:, 1],
+            color=labels,
+            title=title,
+            labels={'x': 'Dim 1', 'y': 'Dim 2'},
+            hover_data=[hover_text]
+        )
+    elif dim == 3:
+        fig = px.scatter_3d(
+            x=latent_repr[:, 0],
+            y=latent_repr[:, 1],
+            z=latent_repr[:, 2],
+            color=labels,
+            title=title,
+            labels={'x': 'Dim 1', 'y': 'Dim 2', 'z': 'Dim 3'},
+            hover_data=[hover_text]
+        )
+    else:
+        pca = PCA(n_components=3)
+        latent_3d = pca.fit_transform(latent_repr)
+        fig = px.scatter_3d(
+            x=latent_3d[:, 0],
+            y=latent_3d[:, 1],
+            z=latent_3d[:, 2],
+            color=labels,
+            title=f"{title} (PCA Projection)",
+            labels={'x': 'PC1', 'y': 'PC2', 'z': 'PC3'},
+            hover_data=[hover_text]
+        )
+
+    fig.update_traces(marker=dict(size=point_size, opacity=opacity))
+    fig.update_layout(
+        template="plotly_dark",
+        title_x=0.5,
+        showlegend=labels is not None,
+        width=800,
+        height=600
+    )
+
+    if save_path:
+        fig.write_html(save_path)
+
+    return fig
     
