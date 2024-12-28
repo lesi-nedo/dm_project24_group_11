@@ -181,7 +181,6 @@ def train_autoencoder(
     if configs.get("lr", None) is not None:
         optimizer_configs["lr"] = configs["lr"]
 
-    num_hidden_layers = len(scale_factor)
     data_input = OurDataset(dataset_path)
 
     torch.set_float32_matmul_precision('medium')
@@ -262,6 +261,7 @@ def train_autoencoder(
         
         trainer.fit(autoencoder, train_loader, val_loader)
 
+        
         # Collect fold metrics
         
         val_loss = trainer.callback_metrics['val_loss'].item()
@@ -272,6 +272,11 @@ def train_autoencoder(
         fold_metrics['train_losses'].append(train_loss)
         fold_metrics['val_losses'].append(val_loss)
         fold_metrics['reconstruction_errors'].append(mse_reconstruction_error)
+
+        torch.cuda.synchronize()
+        del train_loader
+        del autoencoder, trainer
+
 
 
     # Calculate and log cross-validation statistics
@@ -322,24 +327,27 @@ def final_train_autoencoder(configs: dict):
     lr_scheduler = configs["lr_scheduler"]
     dataset_path = configs["dataset_path"]
     monitor = configs["monitor"]
-    noise = configs["noise"]
+    noise = configs.get("noise", None)
     noise_level = configs["noise_level"]
     optimizer_configs = configs["optimizer_configs"]
     lr_scheduler_configs = configs["lr_scheduler_configs"]
     max_epochs = configs["max_epochs"]
     trainer_config = configs["trainer_config"]
+    model_save_path = configs["model_save_path"]
 
+    os.makedirs(model_save_path, exist_ok=True)
 
     torch.set_float32_matmul_precision('medium')
 
     num_hidden_layers = len(scale_factor)
     data_input = OurDataset(dataset_path)
 
-    model_save_dir = os.path.join(DEFAULT_ROOT_DIR, "autoencoder")
+    
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
     file_name = f"autoencoder-{latent_dim}-{num_hidden_layers}-{timestamp}"
 
-    train_loader = DataLoader(data_input.to_tensor(), batch_size=batch_size, num_workers=5, shuffle=True)
+    train_loader = DataLoader(data_input.to_tensor(), batch_size=batch_size, num_workers=5, shuffle=True, pin_memory=True)
 
     callbacks = [
         LearningRateMonitor(logging_interval="epoch"),
@@ -369,8 +377,12 @@ def final_train_autoencoder(configs: dict):
 
     # Save model
 
-    model_save_path = os.path.join(model_save_dir, f"{file_name}.pt")
+    model_save_path = os.path.join(model_save_path, f"{file_name}.pt")
     torch.save(autoencoder.state_dict(), model_save_path)
+
+    torch.cuda.synchronize()
+    del train_loader
+    del autoencoder, trainer
 
     
 
@@ -471,68 +483,73 @@ def main_autoencoder(num_samples=25, max_num_epochs=50):
     storage_path = os.path.abspath(os.path.join(os.getcwd(), "models", "ray_autoencoder"))
     os.makedirs(storage_path, exist_ok=True)
 
-    # Configure Ray with GPU
-    ray.init(
-        num_cpus=32,
-        num_gpus=1,
-        _system_config={
-            "automatic_object_spilling_enabled": True,
-            "object_spilling_config": json.dumps(
-                {"type": "filesystem", "params": {"directory_path": "/tmp/ray_spill"}}
-            ),
-        }
-    )
+    try:
+        # Configure Ray with GPU
+        ray.init(
+            num_cpus=32,
+            num_gpus=1,
+            _system_config={
+                "automatic_object_spilling_enabled": True,
+                "object_spilling_config": json.dumps(
+                    {"type": "filesystem", "params": {"directory_path": "/tmp/ray_spill"}}
+                ),
+            }
+        )
 
-    # Enhanced resource configuration
-    resources_per_trial = {
-        "cpu": 4,  # 32 CPUs / 8 parallel trials
-        "gpu": 0.125  # Allow 8 trials to share 1 GPU
-    }
-
-    # Add GPU-specific configurations
-    configs_part.update({
-        "trainer_config": {
-            "accelerator": "gpu",
-            "devices": 1,
-            "strategy": "auto",
-            "precision": "16-mixed",  # Enable mixed precision training
-            "enable_progress_bar": False,
-            # "gradient_clip_val": 1.0,
-
+        # Enhanced resource configuration
+        resources_per_trial = {
+            "cpu": 4,  # 32 CPUs / 8 parallel trials
+            "gpu": 0.125  # Allow 8 trials to share 1 GPU
         }
 
-    })
+        # Add GPU-specific configurations
+        configs_part.update({
+            "trainer_config": {
+                "accelerator": "gpu",
+                "devices": 1,
+                "strategy": "auto",
+                "precision": "16-mixed",  # Enable mixed precision training
+                "enable_progress_bar": False,
+                # "gradient_clip_val": 1.0,
 
-    # Enhanced Ray Tune run configuration
-    result = tune.run(
-        partial(train_wrapper_autoencoder, args_dict=configs_part),
-        resources_per_trial=resources_per_trial,
-        config=configs,
-        num_samples=num_samples,
-        scheduler=scheduler,
-        # search_alg=search_alg,
-        storage_path=storage_path,
-        keep_checkpoints_num=3,
-        checkpoint_score_attr="mean-val_loss",
-        stop={
-            "val_loss": 0.001,
-            "training_iteration": max_num_epochs
-        },
-        # resume=True,
-        verbose=1,
-    )
+            }
 
-    # Enhanced results analysis
-    best_trial = result.get_best_trial("combined_metric", "min", "last")
-    best_config = best_trial.config
-    best_checkpoint = result.get_best_checkpoint(best_trial, "combined_metric", "min")
+        })
 
-    # Log detailed results
-    print(f"Best trial config: {best_config}")
-    print(f"Best validation loss: {best_trial.last_result['combined_metric']}")
-    print(f"Best checkpoint path: {best_checkpoint}")
+        # Enhanced Ray Tune run configuration
+        result = tune.run(
+            partial(train_wrapper_autoencoder, args_dict=configs_part),
+            resources_per_trial=resources_per_trial,
+            config=configs,
+            num_samples=num_samples,
+            scheduler=scheduler,
+            # search_alg=search_alg,
+            storage_path=storage_path,
+            keep_checkpoints_num=3,
+            checkpoint_score_attr="mean-val_loss",
+            stop={
+                "val_loss": 0.001,
+                "training_iteration": max_num_epochs
+            },
+            # resume=True,
+            verbose=1,
+        )
 
-    return best_trial, best_config, best_checkpoint
+        # Enhanced results analysis
+        best_trial = result.get_best_trial("combined_metric", "min", "last")
+        best_config = best_trial.config
+        best_checkpoint = result.get_best_checkpoint(best_trial, "combined_metric", "min")
+
+        # Log detailed results
+        print(f"Best trial config: {best_config}")
+        print(f"Best validation loss: {best_trial.last_result['combined_metric']}")
+        print(f"Best checkpoint path: {best_checkpoint}")
+
+        return best_trial, best_config, best_checkpoint
+    except Exception as e:
+        raise e
+    finally:
+        ray.shutdown()
 
 
 

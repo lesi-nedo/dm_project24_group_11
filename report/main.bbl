@@ -1,0 +1,8 @@
+\begin{thebibliography}{1}
+
+\bibitem{test_cite}
+Book Author.
+\newblock {\em Book title}.
+\newblock Book publisher, 2000.
+
+\end{thebibliography}

@@ -12,13 +12,14 @@ import os
 import ray
 import psutil
 
+from functools import partial
 from torch.utils.data import DataLoader, TensorDataset
 from torch import nn
 from sklearn.utils import resample
 from imblearn.over_sampling import SMOTE
 from collections import Counter
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
 from ray.train import Checkpoint
 from ray import train, tune
 
@@ -65,7 +66,7 @@ def analyze_class_imbalance(y, plot=True):
     
     return class_counts, imbalance_ratio
 
-def balance_dataset(X, y, method='random_oversampling', random_state=42):
+def balance_dataset(X, y, method='random_oversampling'):
     """
     Balance a dataset using various methods.
     
@@ -100,7 +101,7 @@ def balance_dataset(X, y, method='random_oversampling', random_state=42):
                 cls_df = resample(cls_df,
                                 replace=True,
                                 n_samples=n_samples,
-                                random_state=random_state)
+                               )
             balanced_dfs.append(cls_df)
         
         # Combine balanced datasets
@@ -123,7 +124,7 @@ def balance_dataset(X, y, method='random_oversampling', random_state=42):
                 cls_df = resample(cls_df,
                                 replace=False,
                                 n_samples=n_samples,
-                                random_state=random_state)
+                            )
             balanced_dfs.append(cls_df)
         
         df_balanced = pd.concat(balanced_dfs)
@@ -131,7 +132,7 @@ def balance_dataset(X, y, method='random_oversampling', random_state=42):
     
     elif method == 'smote':
         # Use SMOTE for more sophisticated oversampling
-        smote = SMOTE(random_state=random_state)
+        smote = SMOTE()
         X_balanced, y_balanced = smote.fit_resample(X, y)
         return X_balanced, y_balanced
     
@@ -145,13 +146,14 @@ class NNClassifier(pl.LightningModule):
         input_dim,
         optimizer: torch.optim.Optimizer = torch.optim.AdamW,
         act_fn: nn.Module = nn.ReLU(),
-        config_optimizer: dict = {'lr': 1e-3, 'weight_decay': 1e-5}, 
+        config_optimizer: dict = {'lr': 1e-3, 'weight_decay': 1e-5},
+        optimizers_dict: dict = {str(torch.optim.AdamW): {'betas': (0.9, 0.999), 'eps': 1e-8}},
         hidden_dims: list = [64, 32],
         dropout: float = 0.3,
         class_weights: torch.Tensor = None
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['class_weights', 'act_fn'])
         
         # Build layers
         layers = []
@@ -166,6 +168,11 @@ class NNClassifier(pl.LightningModule):
                 nn.Dropout(dropout)
             ])
             prev_dim = dim
+
+        if class_weights is not None:
+            self.register_buffer('class_weights', class_weights)
+        else:
+            self.class_weights = None
         
         # Output layer
         layers.append(nn.Linear(prev_dim, 1))
@@ -175,25 +182,32 @@ class NNClassifier(pl.LightningModule):
         self.class_weights = class_weights
         
         # Metrics
-        self.train_acc = torchmetrics.Accuracy(task='binary')
-        self.val_acc = torchmetrics.Accuracy(task='binary')
-        self.f1_score = torchmetrics.F1Score(task='binary')
-        self.auroc = torchmetrics.AUROC(task='binary')
+        self.train_acc = torchmetrics.Accuracy(task='binary', num_classes=2)
+        self.val_acc = torchmetrics.Accuracy(task='binary', num_classes=2)
+        self.f1_score = torchmetrics.F1Score(task='binary', num_classes=2)
+        self.auroc = torchmetrics.AUROC(task='binary', num_classes=2)
 
+    def _init_weights(self, layer):
+        for layer in self.model:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_normal_(layer.weight)
+                nn.init.zeros_(layer.bias)
+
+        
     def forward(self, x):
         return self.model(x)
 
     def configure_optimizers(self):
         optimizer = self.hparams.optimizer(
             self.parameters(),
-            **self.hparams.config_optimizer
+            **self.hparams.config_optimizer,
+            **self.hparams.optimizers_dict[str(self.hparams.optimizer)]
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='min',
             factor=0.1,
             patience=5,
-            verbose=True
         )
         return {
             "optimizer": optimizer,
@@ -206,40 +220,44 @@ class NNClassifier(pl.LightningModule):
     def _shared_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
+        y = y.float().view(-1, 1)
+
+        
         
         # Handle class weights if provided
         if self.class_weights is not None:
-            weights = self.class_weights[y.long()]
-            loss = F.binary_cross_entropy(y_hat, y.float().view(-1, 1), weight=weights)
+            weights = self.class_weights[y.long().squeeze()]  # Remove extra dimension for indexing
+            loss = F.binary_cross_entropy(y_hat.squeeze(), y.squeeze(), weight=weights)
         else:
-            loss = F.binary_cross_entropy(y_hat, y.float().view(-1, 1))
+            loss = F.binary_cross_entropy(y_hat.squeeze(), y.squeeze())
             
         return loss, y_hat, y
 
     def training_step(self, batch, batch_idx):
         loss, y_hat, y = self._shared_step(batch, batch_idx)
-        
-        # Log metrics
-        self.train_acc(y_hat, y)
+        # Avoid updating metrics if we have only one class
+        if len(torch.unique(y)) > 1:
+            self.train_acc(y_hat, y)
+            self.log('train_acc', self.train_acc, on_epoch=True, prog_bar=True)
         self.log('train_loss', loss, on_epoch=True, prog_bar=True)
-        self.log('train_acc', self.train_acc, on_epoch=True, prog_bar=True)
-        
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss, y_hat, y = self._shared_step(batch, batch_idx)
-        
-        # Log metrics
-        self.val_acc(y_hat, y)
-        self.f1_score(y_hat, y)
-        self.auroc(y_hat, y)
-        
+        # Avoid updating metrics if we have only one class
+        if len(torch.unique(y)) > 1:
+            self.val_acc(y_hat, y)
+            self.f1_score(y_hat, y)
+            self.auroc(y_hat, y)
+            self.log('val_acc', self.val_acc, on_epoch=True)
+            self.log('val_f1', self.f1_score, on_epoch=True)
+            self.log('val_auroc', self.auroc, on_epoch=True)
         self.log('val_loss', loss, on_epoch=True, prog_bar=True)
-        self.log('val_acc', self.val_acc, on_epoch=True)
-        self.log('val_f1', self.f1_score, on_epoch=True)
-        self.log('val_auroc', self.auroc, on_epoch=True)
-        
         return loss
+    
+    def on_before_optimizer_step(self, optimizer):
+        # Log learning rate
+        self.log('learning_rate', optimizer.param_groups[0]['lr'])
 
     def predict_step(self, batch, batch_idx):
         x = batch
@@ -257,6 +275,18 @@ def train_classifier(
     torch.set_float32_matmul_precision('medium')
 
     kf = KFold(n_splits=num_folds, shuffle=True)
+    kf = StratifiedKFold(n_splits=num_folds, shuffle=True)
+
+    max_epochs = kwargs.get('max_epochs', 100)
+    batch_size = kwargs.get('batch_size', 64)
+    monitor = kwargs.get('monitor', 'val_loss')
+    trainer_configs = kwargs.get('trainer_configs', {})
+
+    del kwargs['trainer_configs']
+    del kwargs['monitor']
+    del kwargs['max_epochs']
+    del kwargs['batch_size']
+
 
     fold_metrics = {
         'train_loss': [],
@@ -267,32 +297,51 @@ def train_classifier(
         'val_auroc': []
     }
 
-    for fold, (train_idx, val_idx) in enumerate(kf.split(latent_data)):
+    for fold, (train_idx, val_idx) in enumerate(kf.split(latent_data, labels)):
         print(f"Fold {fold + 1}")
         train_data = latent_data[train_idx]
         train_labels = labels[train_idx]
         val_data = latent_data[val_idx]
         val_labels = labels[val_idx]
-        
+        class_counts = torch.bincount(train_labels.long())
+        min_class_count = torch.min(class_counts).item()
+        batch_size = min(batch_size, min_class_count)
+        batch_size = max(batch_size, 2)
+
         train_dataset = TensorDataset(train_data, train_labels)
         val_dataset = TensorDataset(val_data, val_labels)
         
+
+        _, label_counts = np.unique(train_labels, return_counts=True)
+        weight_per_class = 1. / label_counts
+        weights = np.array([weight_per_class[t] for t in train_labels])
+        weights = torch.from_numpy(weights).float()
+
         train_loader = DataLoader(
             train_dataset, 
-            batch_size=kwargs.get('batch_size', 64),
-            shuffle=True,
-            num_workers=4
+            batch_size=batch_size,
+            num_workers=2,
+            persistent_workers=True,
+            pin_memory=True,
+            sampler=torch.utils.data.WeightedRandomSampler(
+                weights=weights,
+                num_samples=len(train_labels),
+                replacement=True
+            ),
+            drop_last=True
         )
         
         val_loader = DataLoader(
             val_dataset, 
-            batch_size=kwargs.get('batch_size', 64),
+            batch_size=batch_size,
             shuffle=False,
-            num_workers=4
+            num_workers=2,
+            persistent_workers=True,
+            pin_memory=True,
+            drop_last=True
         )
         
         # Calculate class weights
-        class_counts = torch.bincount(train_labels.long())
         class_weights = len(train_labels) / (2 * class_counts)
         # Initialize and train classifier
         classifier = NNClassifier(
@@ -302,19 +351,16 @@ def train_classifier(
         )
         
         trainer = pl.Trainer(
-            max_epochs=kwargs.get('max_epochs', 100),
-            accelerator='gpu',
-            devices=1,
+            max_epochs=max_epochs,
             callbacks=[
-                EarlyStopping(patience=10, monitor=kwargs.monitor),
+                EarlyStopping(patience=10, monitor=monitor),
                 # ModelCheckpoint(
                 #     monitor='val_loss',
                 #     dirpath='models/classifier',
                 #     filename='best-classifier'
                 # )
             ],
-            **kwargs.get('trainer_configs', {}),
-            enable_progress_bar=True
+            **trainer_configs,
         )
         
         trainer.fit(
@@ -323,12 +369,17 @@ def train_classifier(
             val_loader
         )
 
+
         fold_metrics['train_loss'].append(trainer.callback_metrics['train_loss'].item())
         fold_metrics['val_loss'].append( trainer.callback_metrics['val_loss'].item())
         fold_metrics['train_acc'].append(trainer.callback_metrics['train_acc'].item())
         fold_metrics['val_acc'].append(trainer.callback_metrics['val_acc'].item())
         fold_metrics['val_f1'].append(trainer.callback_metrics['val_f1'].item())
         fold_metrics['val_auroc'].append(trainer.callback_metrics['val_auroc'].item())
+
+        torch.cuda.synchronize()
+        del train_loader, val_loader
+        del classifier, trainer
     
     mean_metrics = {k: np.mean(v) for k, v in fold_metrics.items()}
 
@@ -346,6 +397,12 @@ def train_classifier(
         
         checkpoint = Checkpoint.from_directory(tmpdir)
 
+        final_metrics.update({
+            "val_loss": mean_metrics['val_loss'],
+            "val_f1": mean_metrics['val_f1'],
+            "val_auroc": mean_metrics['val_auroc']
+        })
+
         train.report(
             checkpoint=checkpoint,
             metrics=final_metrics
@@ -356,8 +413,9 @@ def train_classifier(
     return final_metrics
 
 
-def train_classifier_wrapper(tune_config: dict, norm_config: dict):
-    return train_classifier(**tune_config, **norm_config)
+def train_classifier_wrapper(tune_configs: dict, norm_configs_id: ray.ObjectRef):
+    norm_configs = ray.get(norm_configs_id)
+    return train_classifier(**tune_configs, **norm_configs)
 
 def main_classifier(latent_data: torch.Tensor, labels: torch.Tensor, num_samples=10, max_num_epochs=100):
     
@@ -374,7 +432,7 @@ def main_classifier(latent_data: torch.Tensor, labels: torch.Tensor, num_samples
     }
     
     norm_configs = {
-        "optimizer_configs": {
+        "optimizers_dict": {
             str(torch.optim.AdamW): {
                 "betas": (0.87, 0.99),
                 "eps": 1e-9
@@ -404,17 +462,54 @@ def main_classifier(latent_data: torch.Tensor, labels: torch.Tensor, num_samples
     cpu_count = psutil.cpu_count(logical=False)
 
     resources_per_trial = {
-        "cpu": cpu_count // 4,
-        "gpu": 1 / 4
+        "cpu": 4,
+        "gpu": 0.25 
     }
 
-    ray.init(
-        num_cpus=cpu_count,
-        num_gpus=1,
-    )
+    try:
 
-    # analysis = tune.run(
-        
-    
+
+        ray.init(
+            num_cpus=cpu_count,
+            num_gpus=1,
+        )
+
+        norm_configs_id = ray.put(norm_configs)
+
+        analysis = tune.run(
+            partial(train_classifier_wrapper, norm_configs_id=norm_configs_id),
+            config=tune_configs,
+            resources_per_trial=resources_per_trial,
+            num_samples=num_samples,
+            storage_path=storage_path,
+            keep_checkpoints_num=1,
+            checkpoint_score_attr='combined_metrics',
+            stop = {
+                "val_loss": 0.01,
+            },
+            verbose=2
+            
+        )
+
+        # Enhanced results analysis
+        best_trial = analysis.get_best_trial("combined_metrics", "min", "last")
+        best_config = best_trial.config
+        best_checkpoint = analysis.get_best_checkpoint(best_trial, "combined_metrics", "min")
+
+        # Log detailed results
+        print(f"Best trial config: {best_config}")
+        print(f"Best combined metrics: {best_trial.last_result['combined_metrics']}")
+        print(f"Best validation loss: {best_trial.last_result['val_loss']}")
+        print(f"Best validation F1: {best_trial.last_result['val_f1']}")
+        print(f"Best validation AUROC: {best_trial.last_result['val_auroc']}")
+        print(f"Best checkpoint path: {best_checkpoint}")
+
+        return best_trial, best_config, best_checkpoint
+    except Exception:
+        raise
+    finally:
+        ray.shutdown()
+
+
 
 
