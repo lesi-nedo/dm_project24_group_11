@@ -264,7 +264,7 @@ class NNClassifier(pl.LightningModule):
         return self(x)
 
 def train_classifier(
-    latent_data: torch.Tensor,
+    data: torch.Tensor,
     labels: torch.Tensor,
     num_folds = 5,
     **kwargs
@@ -297,11 +297,11 @@ def train_classifier(
         'val_auroc': []
     }
 
-    for fold, (train_idx, val_idx) in enumerate(kf.split(latent_data, labels)):
+    for fold, (train_idx, val_idx) in enumerate(kf.split(data, labels)):
         print(f"Fold {fold + 1}")
-        train_data = latent_data[train_idx]
+        train_data = data[train_idx]
         train_labels = labels[train_idx]
-        val_data = latent_data[val_idx]
+        val_data = data[val_idx]
         val_labels = labels[val_idx]
         class_counts = torch.bincount(train_labels.long())
         min_class_count = torch.min(class_counts).item()
@@ -417,12 +417,12 @@ def train_classifier_wrapper(tune_configs: dict, norm_configs_id: ray.ObjectRef)
     norm_configs = ray.get(norm_configs_id)
     return train_classifier(**tune_configs, **norm_configs)
 
-def main_classifier(latent_data: torch.Tensor, labels: torch.Tensor, num_samples=10, max_num_epochs=100):
+def main_classifier(data: torch.Tensor, labels: torch.Tensor, num_samples=10, max_num_epochs=100):
     
     tune_configs = {
         "hidden_dims": tune.choice([[64, 32], [16, 8], [32], [64]]),
         "batch_size": tune.choice([32, 64, 128]),
-        "act_fn": tune.choice([nn.ReLU(), nn.Tanh(), nn.GELU(), nn.LeakyReLU(), nn.Tanhshrink(), nn.SELU()]),
+        "act_fn": tune.choice([nn.Tanh(), nn.GELU(), nn.LeakyReLU(), nn.Tanhshrink(), nn.SELU()]),
         "optimizer": tune.choice([torch.optim.AdamW, torch.optim.SGD]),
         "dropout": tune.uniform(0.05, 0.3),
         "config_optimizer": {
@@ -445,7 +445,7 @@ def main_classifier(latent_data: torch.Tensor, labels: torch.Tensor, num_samples
         "max_epochs": max_num_epochs,
         "num_folds": 5,
         "monitor": "val_loss",
-        "latent_data": latent_data,
+        "data": data,
         "labels": labels,
 
         "trainer_configs": {

@@ -48,16 +48,39 @@ After careful consideration, we decided to obtain a better version of the two da
 \textit{https://www.procyclingstats.com}
 
 \subsection{Correlation between features}
-\clearpage
+\subsection{Correlation Matrix}
+
  We begin the feature correlation analysis with the correlation matrix between all the numerical features of the two datasets combined.
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.7\textwidth]{assets/correlation_matrix.png}
+    \includegraphics[width=0.6\textwidth]{assets/correlation_matrix.png}
     \caption{Correlation matrix between all relevant features.}
     \label{fig:correlation-matrix}
 \end{figure}
 We observed a strong expected positive correlation between \textit{height} and \textit{weight} (0.74), \textit{climb\_total} and \textit{profile} (0.71), \textit{points} and \textit{uci\_points} (0.84).  In addition, there is a significant positive correlation between  \textit{climb\_total} and  \textit{length} (0.52). Less evident positive correlation is \textit{delta} and \textit{length} (0.25). \\
 Regarding the negative correlation, we noted that there is a weak negative correlation between \textit{length} and \textit{is\_tarmac} (0.36), which might indicate that the longer the race, the less likely it is to be primary on tarmac.  As the second most significant negative correlation, we have the one between \textit{points} and \textit{is\_tarmac} (0.32), which again might indicate that a race has more points, on average, the more likely it is to have different types of terrain. Furthermore, there are negative correlations such as \textit{points} and \textit{position} (0.31), \textit{profile} and \textit{delta} (0.28). The last one is counterintuitive, even though it is a feeble correlation, which might indicate that as the race profile becomes more challenging (moving from flat towards high mountains with uphill finish), the time gaps (delta) between riders tend to decrease because of riders grouping?
+\subsection{Points, Age, Temperature and Career Span}
+Even though the number of available \textit{average\_temperature} samples is limited, it is informative to compare how age groups perform across different temperature ranges.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.55\textwidth]{assets/perf_age_group.png}
+    \caption{Average points by age group and temperature range.}
+    \label{fig:temperature-age}
+\end{figure}
+As shown in Figure~\ref{fig:temperature-age}, the 40+ group exhibits high average points (110.0) within the (9.9--14.3) temperature range, and 8.9 points within the (18.6--110.0) range. However, this group has a very small sample size (Figure~\ref{fig:counts_age_group_with_temp}), partly because riders often retire before reaching 40. Consequently, the limited data for this group may skew the average.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.5\textwidth]{assets/counts_age_group.png}
+    \caption{Age distribution of cyclists.}
+    \label{fig:counts_age_group_with_temp}
+\end{figure}
+Next, we examine how age correlates with riders' performance and the cyclists' career duration.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.6\textwidth]{assets/distributions_rel.png}
+    \caption{Average points by age group.}
+    \label{fig:points-age}
+\end{figure}
 
 \subsection{Correct values check}
 
