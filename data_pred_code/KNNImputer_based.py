@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from sklearn.impute import KNNImputer
-from sklearn.metrics import root_mean_squared_error as mse, r2_score
+from sklearn.metrics import root_mean_squared_error as rmse_func, r2_score
 
 from typing import Tuple, Optional, Dict
 
@@ -71,13 +71,11 @@ def predict_feature_knnimp(
             logger.info(f"y_pred shape: {y_pred.shape}, y_true shape: {y_true.shape}")
 
             
-            mse_con = mse(y_true, y_pred)
+            rmse = rmse_func(y_true, y_pred)
             r2 = r2_score(y_true, y_pred)
-            rmse = np.sqrt(mse_con)
             mae = np.mean(np.abs(y_true - y_pred))
             
             metrics = {
-                'mse': round(mse_con, 2),
                 'rmse': round(rmse, 2),
                 'mae': round(mae, 2),
                 'r2': round(r2, 2),

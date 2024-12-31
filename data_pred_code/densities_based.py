@@ -15,7 +15,7 @@ import warnings
 
 
 
-from sklearn.metrics import root_mean_squared_error as mse
+from sklearn.metrics import root_mean_squared_error as rmse_func
 from sklearn.metrics import r2_score, silhouette_score
 
 from sklearn.cluster import KMeans
@@ -464,14 +464,12 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
 def print_density_info(stats_races, predictions, y_test, feature_to_predict):
 
     print("\nMetrics:")
-    mse_score = mse(y_test, predictions[f'{feature_to_predict}_predicted'].loc[y_test.index])
+    rmse_score = rmse_func(y_test, predictions[f'{feature_to_predict}_predicted'].loc[y_test.index])
     r2 = r2_score(y_test, predictions[f'{feature_to_predict}_predicted'].loc[y_test.index])
-    rmse = np.sqrt(mse_score)
     mae = np.mean(np.abs(y_test - predictions[f'{feature_to_predict}_predicted'].loc[y_test.index]))
-    print(f"RMSE: {rmse:.2f} meters")
+    print(f"RMSE: {rmse_score:.2f} meters")
     print(f"R²: {r2:.3f}")
     print(f"MAE: {mae:.2f} meters")
-    print(f"MSE: {mse_score:.2f}")
 
 
 __all__ = ['predict_feature_density', 'print_density_info']
