@@ -398,7 +398,7 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
         plt.close(fig)
         # 4. Create segments
         df['length_category'] = pd.qcut(df['length'], q=5, labels=['VS', 'S', 'M', 'L', 'VL'])
-        df['season_seg'] = pd.cut(df['month'], bins=[0, 4, 8, 12], labels=['Spring', 'Summer', 'Fall'])
+        df['season_seg'] = df['month'].apply(lambda x: 'Spring' if x in [3, 4, 5] else 'Summer' if x in [6, 7, 8] else 'Fall' if x in [9, 10, 11] else 'Winter')
         
         if 'startlist_quality' in df.columns:
             df['quality_level'] = np.where(
