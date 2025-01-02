@@ -5,7 +5,7 @@ import pandas as pd
 
 from sklearn.impute import SimpleImputer
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
 from sklearn.ensemble import RandomForestRegressor
@@ -208,7 +208,7 @@ mean_imputer = SimpleImputer(strategy='mean')
 median_imputer = SimpleImputer(strategy='median')
 most_frequent_imputer = SimpleImputer(strategy='most_frequent')
 knn_imputer = KNNImputer(n_neighbors=5)
-scaler = StandardScaler()
+scaler = MinMaxScaler(feature_range=(-1, 1))
 
 
 iterative_imputer = IterativeImputer(max_iter=40, estimator=RandomForestRegressor())
@@ -258,6 +258,8 @@ def preprocess_helper_scaler(races, pred_features):
         if info['type'] == 'numeric':
             scaled_data = scaler.fit_transform(races[feature].to_numpy().reshape(-1, 1))
             races[feature] = pd.Series(scaled_data.flatten(), index=races[feature].index)
+            
+            
 
 
 

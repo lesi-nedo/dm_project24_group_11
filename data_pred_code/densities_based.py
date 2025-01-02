@@ -69,14 +69,27 @@ def fit_best_distribution(data):
         
 
 
+    # distributions = [
+    #     ('gamma', stats.gamma),
+    #     ('lognorm', stats.lognorm),
+    #     ('weibull_min', stats.weibull_min),
+    #     ('beta', stats.beta),
+    #     ('burr', stats.burr),
+    #     ('burr12', stats.burr12),
+    #     ('gaussian_mix', lambda x: stats.norm(loc=orig_mean, scale=orig_std))
+    # ]
+
     distributions = [
-        ('gamma', stats.gamma),
-        ('lognorm', stats.lognorm),
-        ('weibull_min', stats.weibull_min),
-        ('beta', stats.beta),
-        ('burr', stats.burr),
-        ('burr12', stats.burr12),
-        ('gaussian_mix', lambda x: stats.norm(loc=orig_mean, scale=orig_std))
+        ('dgamma', stats.dgamma),
+        ('skewnorm', stats.skewnorm),
+        ('t', stats.t),
+        ('cauchy', stats.cauchy),
+        ('laplace', stats.laplace),
+        ('levy', stats.levy),
+        ('exponnorm', stats.exponnorm),
+        ('logistic', stats.logistic),
+        ('gennorm', stats.gennorm),
+        ('genextreme', stats.genextreme),
     ]
     
     best_fit = None
@@ -85,53 +98,67 @@ def fit_best_distribution(data):
     if len(data) < 20 or data.std() == 0:
         return None
     
-    
+    log_transform = data > data.mean() + 2 * data.std()
+    if log_transform.any():
+        data_transformed = data.copy()
+        data_transformed[log_transform] = np.log(data_transformed[log_transform])
     
     for name, distribution in distributions:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                if name == 'beta':
-                    data_normalized = (data - data.min()) / (data.max() - data.min())
-                    data_normalized = np.clip(data_normalized, 1e-6, 1 - 1e-6)
-                    params = distribution.fit(data_normalized)
-                    ks_stat, _ = kstest(data_normalized, name, params)
-                    samples = distribution.rvs(*params, size=1000)
-                    samples = samples * (data.max() - data.min()) + data.min() 
-                else:
-                    params = distribution.fit(data)
-                    ks_stat, _ = kstest(data, name, params)
-                    samples = distribution.rvs(*params, size=1000)
+                
+                params = distribution.fit(data)
+                ks_stat, _ = kstest(data, name, params)
+                samples = distribution.rvs(*params, size=1000)
 
+                if log_transform.any():
+                    samples[samples > np.log(data.mean() + 2 * data.std())] = \
+                        np.exp(samples[samples > np.log(data.mean() + 2 * data.std())])
+                    
+                
+                samples = samples[~np.isnan(samples)]
+                samples = samples[~np.isinf(samples)]
+                samples = samples[np.abs(samples) < 1e10]  # Additional safety check
+                
+                if len(samples) == 0:
+                    continue
+                
                 
                 moment_score = (
-                    abs(orig_mean - np.mean(samples)) / orig_std +
-                    abs(orig_std - np.std(samples)) / orig_std +
+                    abs(orig_mean - np.mean(samples)) / (orig_std + 1e-7) +
+                    abs(orig_std - np.std(samples)) / (orig_std + 1e-7) +
                     abs(orig_skew - stats.skew(samples)) +
                     abs(orig_kurtosis - stats.kurtosis(samples))
                 )
 
-                weight_ks = 1.1  # KS statistic weight
-                weight_moment = 0.8  # Moment score weight
-                weight_density = 0.5  # Density score weight
+                weight_ks = 0.5  # KS statistic weight
+                weight_moment = 0.3  # Moment score weight
+                weight_density = 0.2  # Density score weight
 
-                density_score = 0
-                if kde is not None:
-                    x_eval = np.linspace(data.min(), data.max(), len(data))
-                    kde_orig =  kde(x_eval)
-                    kde_fitted = stats.gaussian_kde(samples)(x_eval)
-                    density_score = np.mean(np.abs(kde_orig - kde_fitted))
+                std_samples = np.std(samples)
 
+                density_score = 1.0
+                if kde is not None and std_samples > 1e-8:
+                    try:
+                        x_eval = np.linspace(data.min(), data.max(), len(samples))
+                        kde_orig =  kde(x_eval)
+                        kde_fitted = stats.gaussian_kde(samples)(x_eval)
+                        density_score = np.mean(np.abs(kde_orig - kde_fitted))
+                    except:
+                        print(f"Error calculating density score for {name}")
+                        print(f"Samples: {samples}")
+                        raise
 
                 total_score = (weight_ks * ks_stat) + (weight_moment * moment_score) + (weight_density * density_score)
                 
                 if total_score < best_score:
                     best_fit = (name, params, total_score)
-                    best_score = ks_stat
+                    best_score = total_score
                     
         except Exception as e:
-            continue
-    
+            print(f"Error fitting {name}: {str(e)}")
+            raise e
     return best_fit
 
 
@@ -216,8 +243,9 @@ def predict_feat(row,  kwargs):
     feature_to_predict = kwargs.get('feature_to_predict')
 
 
-    min_valid = max(0, data_mean - 4 * data_std)
-    max_valid = data_mean + 4 * data_std
+    min_valid = max(100, data_mean - 2 * data_std)
+    max_valid = data_mean + 10   * data_std
+
     if pd.isna(row[feature_to_predict]):
         segment = row['segment']
 
@@ -230,26 +258,24 @@ def predict_feat(row,  kwargs):
                 distribution = getattr(stats, dist_name)
 
                 with np.errstate(all='ignore'):  # Suppress numpy warnings
-                    if dist_name == 'beta':
-                        segment_data_no_na = segment_data.dropna()
 
-                        min_val, max_val = segment_data_no_na.min(), segment_data_no_na.max()
+                    try:
                         samples = distribution.rvs(*params, size=100)
-                        prediction = np.median(samples) * (max_val - min_val) + min_val
+                        prediction = np.mean(samples)
+                    except:
+                        prediction = distribution.mean(*params)
+                if np.isnan(prediction) or np.isinf(prediction) or prediction < min_valid or prediction > max_valid:
+                    if len(segment_data) > 0:
+                        prediction = segment_data.mean() + np.random.normal(0, segment_data.std() * 0.005)
                     else:
-                        try:
-                            samples = distribution.rvs(*params, size=100)
-                            prediction = np.mean(samples)
-                        except:
-                            prediction = distribution.mean(*params)
-                    if np.isnan(prediction) or np.isinf(prediction) or prediction < min_valid or prediction > max_valid:
-                        if len(segment_data) > 0:
-                            prediction = segment_data.mean() + np.random.normal(0, segment_data.std() * 0.005)
-                        else:
-                            prediction = data_mean + np.random.normal(0, data_std * 0.005)
+                        prediction = data_mean + np.random.normal(0, data_std * 0.005)
 
-                
-
+                if np.isnan(prediction) or np.isinf(prediction) or prediction < min_valid or prediction > max_valid:
+                    if len(segment_data) > 0:
+                        prediction = segment_data.mean() + np.random.normal(0, segment_data.std() * 0.005)
+                    else:
+                        prediction = data_mean + np.random.normal(0, data_std * 0.005)
+        
                 return np.clip(prediction, min_valid, max_valid)
             except:
                 print(f"Error predicting segment {segment}")
@@ -290,7 +316,7 @@ def predict_feat(row,  kwargs):
         if predictions:
             return np.mean(predictions) + np.random.normal(0, data_std * 0.005)
     
-    return row[feature_to_predict]
+    return np.clip(data_mean + np.random.normal(0, data_std * 0.05), min_valid, max_valid)
 
 def predict_feat_in_chunks(rows, kwargs):
     results_series = pd.Series(dtype='float64')
@@ -372,7 +398,6 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
         plt.close(fig)
         # 4. Create segments
         df['length_category'] = pd.qcut(df['length'], q=5, labels=['VS', 'S', 'M', 'L', 'VL'])
-        df['road_type'] = np.where(df['is_tarmac'], 'T', 'M')
         df['season_seg'] = pd.cut(df['month'], bins=[0, 4, 8, 12], labels=['Spring', 'Summer', 'Fall'])
         
         if 'startlist_quality' in df.columns:
@@ -386,7 +411,6 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
         
         # Create segment ID efficiently
         df['segment'] = (df['length_category'].astype(str) + '_' + 
-                        df['road_type'].astype(str) + '_' + 
                         df['season_seg'].astype(str) + '_' + 
                         df['quality_level'].astype(str) + '_C' + 
                         df['segment_cluster'].astype(str))
