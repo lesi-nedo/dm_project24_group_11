@@ -244,7 +244,7 @@ def predict_feat(row,  kwargs):
 
 
     min_valid = max(100, data_mean - 2 * data_std)
-    max_valid = data_mean + 5   * data_std
+    max_valid = data_mean + 4   * data_std
     
     if pd.isna(row[feature_to_predict]):
         segment = row['segment']
@@ -406,13 +406,10 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
                 'High', 
                 'Low'
             )
-        else:
-            df['quality_level'] = 'Medium'
         
         # Create segment ID efficiently
         df['segment'] = (df['length_category'].astype(str) + '_' + 
                         df['season_seg'].astype(str) + '_' + 
-                        df['quality_level'].astype(str) + '_C' + 
                         df['segment_cluster'].astype(str))
         
         print(f"number of segments: {len(df['segment'].unique())}")
