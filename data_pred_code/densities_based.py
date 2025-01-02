@@ -244,8 +244,8 @@ def predict_feat(row,  kwargs):
 
 
     min_valid = max(100, data_mean - 2 * data_std)
-    max_valid = data_mean + 10   * data_std
-
+    max_valid = data_mean + 5   * data_std
+    
     if pd.isna(row[feature_to_predict]):
         segment = row['segment']
 
