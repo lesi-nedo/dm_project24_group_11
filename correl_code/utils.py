@@ -243,7 +243,7 @@ def radar_plot(data, title, attributes):
     # Calculate grid dimensions
     n_profiles = len(data.keys())
     profiles = list(data.keys())
-    n_cols = min(3, n_profiles)  # Max 3 columns
+    n_cols = min(5, n_profiles)  # Max 3 columns
     n_rows = (n_profiles + n_cols - 1) // n_cols
 
     # Create subplots

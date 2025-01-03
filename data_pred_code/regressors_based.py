@@ -159,6 +159,7 @@ def compare_regressors(races_agg, feature_to_pred, features, only_positive_pred=
     # Create summary DataFrame
     summary = pd.DataFrame({
         'R²': [results[name]['r2'] for name in results.keys()],
+        'RMSE': [results[name]['rmse'] for name in results.keys()],
         'CV RMSE': [results[name]['cv_rmse'] for name in results.keys()],
         'CV RMSE Std': [results[name]['cv_rmse_std'] for name in results.keys()]
     }, index=results.keys())

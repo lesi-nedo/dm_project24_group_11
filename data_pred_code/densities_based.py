@@ -373,7 +373,6 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
         find_optimal_clusters(feature_matrix, n_clusters, fig, gs)
         if run_silhouette:
             silhouette_method(feature_matrix, n_clusters, fig, gs)
-        n_clusters = 8  # Chosen based on elbow and silhouette methods
         kmeans = KMeans(n_clusters=n_clusters_final | n_clusters, random_state=42)
         df['segment_cluster'] = kmeans.fit_predict(feature_matrix)
         
