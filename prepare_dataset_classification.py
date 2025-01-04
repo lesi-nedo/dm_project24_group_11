@@ -18,5 +18,5 @@ for i in set(dataset.keys()) - features_to_mantain:
     del TR[i]
     del TS[i]
 
-TR.to_csv("dataset_classification/TrainDataset.csv")
-TS.to_csv("dataset_classification/TestDataset.csv")
+TR.to_csv("dataset_classification/TrainDataset.csv", index = False)
+TS.to_csv("dataset_classification/TestDataset.csv", index = False)
