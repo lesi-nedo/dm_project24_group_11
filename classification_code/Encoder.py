@@ -13,7 +13,7 @@ logger = setup_logger("Autoencoder")
 class Encoder(nn.Module):
     def __init__(
             self, input_dim: int, latent_dim: int,
-            scale_factor: np.ndarray,
+            hidden_dims: np.ndarray,
             act_fn: nn.Module, dropout: float = 0.4,
             noise: Tensor = None, noise_level: float = 0.01
         ):
@@ -35,8 +35,8 @@ class Encoder(nn.Module):
             act_fn = act_fn()
 
         self.input_dim = input_dim
-        self.num_hidden_layers = len(scale_factor)
-        self.scale_factor = scale_factor
+        self.num_hidden_layers = len(hidden_dims)
+        self.hidden_dims = hidden_dims
         self.noise = noise
         self.act_fn = act_fn
         self.noise_level = noise_level
@@ -46,7 +46,7 @@ class Encoder(nn.Module):
         self.current_epoch = 0
         
         for i in range(self.num_hidden_layers):
-            next_dim = validate_dimensions(input_dim, scale_factor[i], 'multiply')
+            next_dim = hidden_dims[i]
             next_dim = max(next_dim, latent_dim)
             
             # Add residual block

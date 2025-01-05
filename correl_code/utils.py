@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
 from scipy import stats
+from plotly.subplots import make_subplots
 
 
 def create_correlation_matrix(merged_df, columns_of_interest):
@@ -236,33 +237,75 @@ def analyze_performance_peaks(cyclist_name, data, min_races=10):
         'peak_points': cyclist_data[cyclist_data['year'] == peak_year]['points'].mean()
     }
 
-# Function to create enhanced radar plot using Plotly
-def radar_plot(data, title, names, attributes):
-    fig = go.Figure()
 
-    for i, (category, values) in enumerate(data.items()):
-        fig.add_trace(go.Scatterpolar(
-            r=values + values[:1],  # Repeat the first value for closure
-            theta=attributes + [attributes[0]],  # Repeat the first attribute for closure
-            fill='toself',
-            name=f"{category} - {names[category]}",
-            opacity=0.6,
-            marker=dict(size=8)
-        ))
 
+def radar_plot(data, title, attributes):
+    # Calculate grid dimensions
+    n_profiles = len(data.keys())
+    profiles = list(data.keys())
+    n_cols = min(3, n_profiles)  # Max 3 columns
+    n_rows = (n_profiles + n_cols - 1) // n_cols
+
+    # Create subplots
+    fig = make_subplots(
+        rows=n_rows, cols=n_cols,
+        subplot_titles=[f"Profile {p}" for p in profiles],
+        specs=[[{'type': 'polar'}]*n_cols for _ in range(n_rows)],
+        vertical_spacing=0.01
+    )
+
+    # Add traces for each profile
+    for idx, profile in enumerate(profiles):
+        row = idx // n_cols + 1
+        col = idx % n_cols + 1
+        
+        
+        fig.add_trace(
+            go.Scatterpolar(
+                r=data[profile],
+                theta=attributes + [attributes[0]],
+                fill='toself',
+                name=f"{profile}",
+                opacity=0.6,
+                marker=dict(size=8),
+                connectgaps=True,
+            ),
+            row=row, col=col
+        )
+            
+
+    # Update layout
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 2],
-                showline=True,
-                linewidth=1,
-                tickfont=dict(size=10)
-            )
+        height=450*n_rows,  # Adjust height based on number of rows
+        width=1200,         # Fixed width
+        title=dict(
+            text=title,
+            y=1.0,
+            x=0.0,
+            xanchor='center',
+            yanchor='top'
         ),
         showlegend=True,
-        title=title,
-        legend=dict(font=dict(size=12))
+        legend=dict(
+            font=dict(size=10),
+            yanchor="top",
+            y=0.5,
+            xanchor="right",
+            x=1.0
+        ),
+        margin=dict(t=100, b=5, l=50, r=5)
+    )
+
+    # Update each polar subplot
+    fig.update_polars(
+        radialaxis=dict(
+            visible=True,
+            range=[0, 1],
+            showline=True,
+            linewidth=1,
+            tickfont=dict(size=10),
+        ),
+        
     )
     
     return fig

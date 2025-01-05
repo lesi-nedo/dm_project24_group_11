@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import psutil
 
 from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import root_mean_squared_error as mse, r2_score
+from sklearn.metrics import root_mean_squared_error as rmse_func, r2_score
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor, HistGradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, HuberRegressor
 from sklearn.neighbors import KNeighborsRegressor
@@ -50,11 +50,6 @@ def compare_regressors(races_agg, feature_to_pred, features, only_positive_pred=
 
         
     
-   
-    
-    # Handle missing values
-    
-    
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2
@@ -86,10 +81,15 @@ def compare_regressors(races_agg, feature_to_pred, features, only_positive_pred=
 
     for name, model in models.items():
         print(f"\nTraining {name}...")
+       
+        # Perform cross-validation
+        cv_scores = cross_val_score(
+            model, X, y, 
+            cv=5, scoring='neg_root_mean_squared_error'
+        )
+        
         model.fit(X_train, y_train)
 
-        
-        
         # Make predictions
         y_pred = model.predict(X_test)
 
@@ -99,27 +99,20 @@ def compare_regressors(races_agg, feature_to_pred, features, only_positive_pred=
         if only_positive_pred:
             y_pred = np.maximum(y_pred, 0)
         
+        rmse = rmse_func(y_test, y_pred)
         # Calculate metrics
-        rmse = np.sqrt(mse(y_test, y_pred))
         r2 = r2_score(y_test, y_pred)
-        
-        # Perform cross-validation
-        cv_scores = cross_val_score(
-            model, X, y, 
-            cv=5, scoring='neg_root_mean_squared_error'
-        )
         
         results[name] = {
             'model': model,
-            'rmse': rmse,
             'r2': r2,
+            'rmse': rmse,
             'cv_rmse': -cv_scores.mean(),
             'cv_rmse_std': cv_scores.std(),
             'predictions': y_pred
         }
         if print_metrics:
             print(f"{name} Results:")
-            print(f"RMSE: {rmse:.2f} meters")
             print(f"R²: {r2:.3f}")
             print(f"CV RMSE: {-cv_scores.mean():.2f} ± {cv_scores.std():.2f} meters")
     
@@ -149,7 +142,7 @@ def compare_regressors(races_agg, feature_to_pred, features, only_positive_pred=
     ax2.set_title('Model Comparison - R² Score')
     
     # Plot residuals for best model
-    best_model_name = min(results.keys(), key=lambda k: results[k]['rmse'])
+    best_model_name = min(results.keys(), key=lambda k: results[k]['cv_rmse'])
     best_predictions = results[best_model_name]['predictions']
     
     ax3 = fig.add_subplot(gs[1, :])
@@ -165,17 +158,16 @@ def compare_regressors(races_agg, feature_to_pred, features, only_positive_pred=
     
     # Create summary DataFrame
     summary = pd.DataFrame({
-        'RMSE': [results[name]['rmse'] for name in results.keys()],
         'R²': [results[name]['r2'] for name in results.keys()],
         'CV RMSE': [results[name]['cv_rmse'] for name in results.keys()],
         'CV RMSE Std': [results[name]['cv_rmse_std'] for name in results.keys()]
     }, index=results.keys())
     
     print("\nSummary of all models:")
-    print(summary.sort_values('RMSE'))
+    print(summary.sort_values('CV RMSE'))
 
     feature_predictions = pd.Series(results[best_model_name]['model'].predict(X_to_pred), index=predict_data.index)
-
+    
     print("Visualizations for the best model:")
     errors_visualization(y_test, best_predictions, feature_to_pred)
 

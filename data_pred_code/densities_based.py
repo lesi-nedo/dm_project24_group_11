@@ -15,7 +15,7 @@ import warnings
 
 
 
-from sklearn.metrics import root_mean_squared_error as mse
+from sklearn.metrics import root_mean_squared_error as rmse_func
 from sklearn.metrics import r2_score, silhouette_score
 
 from sklearn.cluster import KMeans
@@ -347,7 +347,7 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
         find_optimal_clusters(feature_matrix, n_clusters, fig, gs)
         if run_silhouette:
             silhouette_method(feature_matrix, n_clusters, fig, gs)
-        n_clusters = 8  # Chosen based on elbow and silhouette methods
+        n_clusters = 2  # Chosen based on elbow and silhouette methods
         kmeans = KMeans(n_clusters=n_clusters_final | n_clusters, random_state=42)
         df['segment_cluster'] = kmeans.fit_predict(feature_matrix)
         
@@ -372,7 +372,7 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
         plt.close(fig)
         # 4. Create segments
         df['length_category'] = pd.qcut(df['length'], q=5, labels=['VS', 'S', 'M', 'L', 'VL'])
-        df['road_type'] = np.where(df['is_tarmac'], 'T', 'M')
+        df['road_type'] = np.where(df['is_tarmac'], 'T', 'NT')
         df['season_seg'] = pd.cut(df['month'], bins=[0, 4, 8, 12], labels=['Spring', 'Summer', 'Fall'])
         
         if 'startlist_quality' in df.columns:
@@ -464,14 +464,12 @@ def predict_feature_density(df, segmentation_features, feature_to_predict, n_clu
 def print_density_info(stats_races, predictions, y_test, feature_to_predict):
 
     print("\nMetrics:")
-    mse_score = mse(y_test, predictions[f'{feature_to_predict}_predicted'].loc[y_test.index])
+    rmse_score = rmse_func(y_test, predictions[f'{feature_to_predict}_predicted'].loc[y_test.index])
     r2 = r2_score(y_test, predictions[f'{feature_to_predict}_predicted'].loc[y_test.index])
-    rmse = np.sqrt(mse_score)
     mae = np.mean(np.abs(y_test - predictions[f'{feature_to_predict}_predicted'].loc[y_test.index]))
-    print(f"RMSE: {rmse:.2f} meters")
+    print(f"RMSE: {rmse_score:.2f} meters")
     print(f"R²: {r2:.3f}")
     print(f"MAE: {mae:.2f} meters")
-    print(f"MSE: {mse_score:.2f}")
 
 
 __all__ = ['predict_feature_density', 'print_density_info']
@@ -525,7 +523,7 @@ if __name__ == '__main__':
         test_df.loc[test_indices, 'climb_total'] = np.nan
         
         # Run predictions with error handling
-        predictions, stats = predict_feature_density(
+        predictions, arg_stats = predict_feature_density(
             df=test_df,
             segmentation_features=normal_features,
             n_clusters_final=3,
@@ -535,7 +533,7 @@ if __name__ == '__main__':
         # Print results
         print("\nTest Results:")
         print("-------------")
-        print_density_info(stats, predictions, y_test, 'climb_total')
+        print_density_info(arg_stats, predictions, y_test, 'climb_total')
         
         print("\nSegment Distribution:")
         print(predictions['segment'].value_counts())

@@ -10,7 +10,7 @@ from .ResidualBlock import ResidualBlock
 logger = setup_logger("Autoencoder")
 
 class Decoder(nn.Module):
-    def __init__(self, input_dim: int, latent_dim: int, scale_factor: np.ndarray, 
+    def __init__(self, input_dim: int, latent_dim: int, hidden_dims: np.ndarray, 
                  act_fn: nn.Module, dropout: float = 0.4):
         super().__init__()
         
@@ -28,8 +28,8 @@ class Decoder(nn.Module):
 
         self.hidden_dims = []
         self.latent_dim = latent_dim
-        self.num_hidden_layers = len(scale_factor)
-        self.scale_factor = scale_factor
+        self.num_hidden_layers = len(hidden_dims)
+        self.hidden_dims = hidden_dims
         self.act_fn = act_fn
         self.input_dim = input_dim
         self.current_epoch = 0
@@ -37,7 +37,7 @@ class Decoder(nn.Module):
         self.decoder = nn.ModuleList()
         prev_dim = input_dim
         for i in range(self.num_hidden_layers):
-            next_dim = validate_dimensions(input_dim, scale_factor[i], 'multiply')
+            next_dim = hidden_dims[i]
             self.hidden_dims.append(next_dim)
             prev_dim = next_dim
         

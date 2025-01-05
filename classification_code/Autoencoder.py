@@ -16,7 +16,7 @@ class Autoencoder(pl.LightningModule):
         
     def __init__(
             self, input_dim: int = None, latent_dim: int= None,
-            scale_factor: np.ndarray = None,
+            hidden_dims: np.ndarray = None,
             act_fn: nn.Module=None, optimizer: Optimizer = None,
             config_optimizer: dict = None, dropout: float = 0.4, 
             lr_scheduler: LRScheduler = None, config_lr_scheduler: dict = None,
@@ -29,7 +29,7 @@ class Autoencoder(pl.LightningModule):
         Args:
             input_dim (int): Input dimension.
             latent_dim (int): Latent dimension.
-            scale_factor (np.ndarray): Scale factor for each layer.
+            hidden_dims (np.ndarray): Hidden layer dimensionality.
             act_fn : Activation function.
             optimizer : Optimizer.
             config_optimizer : Optimizer configuration.
@@ -43,15 +43,17 @@ class Autoencoder(pl.LightningModule):
         """
 
         super().__init__()
+        if input_dim is None:
+            return
         self.save_hyperparameters()
         self.loss_function = nn.MSELoss(reduction="mean")
         self.eps = 1e-8  # Small constant for numerical stability
         self.warmup_epochs = 1
         self.smoothing = 0.1
-        self.encoder = Encoder(input_dim, latent_dim, scale_factor, act_fn, dropout, noise, noise_level)
+        self.encoder = Encoder(input_dim, latent_dim, hidden_dims, act_fn, dropout, noise, noise_level)
         self._init_weights(self.encoder.encoder)
         self._init_weights(self.encoder.latent_layer)
-        self.decoder = Decoder(input_dim, latent_dim, scale_factor, act_fn, dropout)
+        self.decoder = Decoder(input_dim, latent_dim, hidden_dims, act_fn, dropout)
         self._init_weights(self.decoder.decoder)
         self._init_weights(self.decoder.output_layer)
         self.kl_weight = 0.01  # Add KL divergence weight
@@ -122,7 +124,6 @@ class Autoencoder(pl.LightningModule):
             0.1,   # climb_total
             0.15,  # profile
             0.1,   # startlist_quality
-            0.1,   # position
             0.075, # cyclist_age
             0.075  # delta
         ]).to(x.device)

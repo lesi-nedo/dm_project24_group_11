@@ -1,7 +1,9 @@
 import json
+import logging
 import pickle
 import tempfile
 import lightning as pl
+import psutil
 import ray
 import ray.air
 import ray.train
@@ -30,19 +32,22 @@ from IPython.display import display
 
 from sklearn.model_selection import KFold
 from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.decomposition import PCA
 
 from typing import Optional, Tuple
-
-
+from sklearn.preprocessing import LabelEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
 from functools import partial
 
 from .Autoencoder import Autoencoder
 from .logging import setup_logger
+import logging
 
-logger = setup_logger("Autoencoder")
+
+
 
 
 DEFAULT_ROOT_DIR = "models"
@@ -114,24 +119,93 @@ class GenerateCallback(Callback):
 
 
 class OurDataset(Dataset):
-    def __init__(self, csv_file:str, transform=None):
+    def __init__(self, csv_file:str, apply_transformers=True, transform=None, call_on_df_funcs=None):
         self.data = pd.read_csv(csv_file)
-        self.label = self.data.loc[:, "label"]
+        self.labels = self.data.loc[:, "label"]
         self.data = self.data.drop(columns=["label"])
+
+        if call_on_df_funcs:
+            for func in call_on_df_funcs:
+                self.data = func(self.data)
+
+
+        if apply_transformers:
+            numerical_columns = self.data.select_dtypes(include=['int64', 'float64']).columns
+            categorical_columns = self.data.select_dtypes(include=['object', 'category']).columns
+
+            self.preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), numerical_columns),
+                ('cat', OneHotEncoder(drop='first'), categorical_columns)
+            ], remainder='passthrough')
+
+            transformed_data = self.preprocessor.fit_transform(self.data)
+            # Convert back to DataFrame with proper column names
+            if len(categorical_columns) > 0:
+                # Get feature names after transformation
+                feature_names = (numerical_columns.tolist() + 
+                                self.preprocessor.named_transformers_['cat']
+                                .get_feature_names_out(categorical_columns).tolist())
+                self.data = pd.DataFrame(transformed_data, columns=feature_names)
+            else:
+                self.data = pd.DataFrame(transformed_data, columns=self.data.columns)
+                
         self._change_to_numeric()
 
-        self.scaler = MinMaxScaler()
-        scaled_data = self.scaler.fit_transform(self.data)
-        self.data = pd.DataFrame(scaled_data, columns=self.data.columns)
         self.feature_names = self.data.columns
         self.shape = self.data.shape
+        if self.data.isnull().values.any():
+            # raise ValueError("Dataset contains missing values. Please handle them before training.")
+            print("Dataset contains missing values. Please handle them before training.")
+            return
+        
         self.data_tensor = torch.tensor(self.data.values, dtype=torch.float32)
-        self.label_tensor = torch.tensor(self.label.values, dtype=torch.float32)
+        self.label_tensor = torch.tensor(self.labels.values, dtype=torch.float32)
         self.transform = transform
 
+    def apply_on_df(self, func, features_to_apply=None, inplace=True):
+        if features_to_apply:
+            data = func(self.data[features_to_apply])
+        else:
+            data = func(self.data)
+        if inplace:
+            if features_to_apply:
+                self.data[features_to_apply] = data
+            else:
+                self.data = data
+            self._change_to_numeric()
+            self.data_tensor = torch.tensor(self.data.values, dtype=torch.float32)
+            return self.data
+            
+        return data
+    def update_data(self, new_data, labels=None):
+        self.data = new_data.copy()
+        self._change_to_numeric()
+        self.data_tensor = torch.tensor(self.data.values, dtype=torch.float32)
+
+        if labels is not None:
+            self.labels = labels.copy()
+            self.label_tensor = torch.tensor(self.labels.values, dtype=torch.float32)
+    
     def _change_to_numeric(self):
         for col in self.data.columns:
-            self.data[col] = pd.to_numeric(self.data[col], errors="coerce", downcast="float")
+            if self.data[col].dtype == "object":
+                # Check if all values can be converted to numeric
+                try:
+                    pd.to_numeric(self.data[col], errors='raise')
+                    # If successful, convert to float
+                    self.data[col] = pd.to_numeric(self.data[col], errors="coerce", downcast="float")
+                except (ValueError, TypeError):
+                    # Skip if column contains non-numeric strings
+                    continue
+            elif self.data[col].dtype == "bool":
+                self.data[col] = self.data[col].astype(float)
+            elif self.data[col].dtype == "category":
+                self.data[col] = self.data[col].cat.codes.astype(float)
+                
+
+          
+                
 
     def __len__(self):
         return len(self.data)
@@ -168,7 +242,7 @@ def train_autoencoder(
     
 
     latent_dim = configs["latent_dim"]
-    scale_factor = configs["scale_factor"]
+    hidden_dims = configs["hidden_dims"]
     act_fn = configs["act_fn"]
     dropout = configs.get("dropout", None)
     batch_size = configs["batch_size"]
@@ -233,7 +307,7 @@ def train_autoencoder(
 
         autoencoder = Autoencoder(
             data_input.shape[1], latent_dim,
-            scale_factor, act_fn, optimizer, optimizer_configs, dropout,
+            hidden_dims, act_fn, optimizer, optimizer_configs, dropout,
             lr_scheduler, lr_scheduler_configs, monitor,
             noise, noise_level
         )
@@ -319,7 +393,7 @@ def train_autoencoder(
 
 def final_train_autoencoder(configs: dict):
     latent_dim = configs["latent_dim"]
-    scale_factor = configs["scale_factor"]
+    hidden_dims = configs["hidden_dims"]
     act_fn = configs["act_fn"]
     dropout = configs.get("dropout", None)
     batch_size = configs["batch_size"]
@@ -339,7 +413,7 @@ def final_train_autoencoder(configs: dict):
 
     torch.set_float32_matmul_precision('medium')
 
-    num_hidden_layers = len(scale_factor)
+    num_hidden_layers = len(hidden_dims)
     data_input = OurDataset(dataset_path)
 
     
@@ -361,7 +435,7 @@ def final_train_autoencoder(configs: dict):
 
     autoencoder = Autoencoder(
         data_input.shape[1], latent_dim,
-        scale_factor, act_fn, optimizer, optimizer_configs, dropout,
+        hidden_dims, act_fn, optimizer, optimizer_configs, dropout,
         lr_scheduler, lr_scheduler_configs, monitor,
         noise, noise_level
     )
@@ -402,22 +476,21 @@ def train_wrapper_autoencoder(configs: dict, args_dict: dict):
     return train_autoencoder(configs, **args_dict_copy)
 
 
-def main_autoencoder(num_samples=25, max_num_epochs=50):
+def main_autoencoder(dataset_path, num_samples=25, max_num_epochs=50):
     # Enhanced search space with more granular options
     configs = {
         "latent_dim": tune.choice([2, 3]),
-        "scale_factor": tune.choice([
-            [0.5], 
-            [0.7, 0.5],
-            [0.8, 0.6]
+        "hidden_dims": tune.choice([
+            [4], 
+            [6, 2],
+            [3]
         ]),
-        "act_fn": tune.choice(["GELU", "LeakyReLU", "Tanhshrink", "SELU","ReLU"]),
+        "act_fn": tune.choice(["GELU", "LeakyReLU", "Tanhshrink", "SELU"]),
         "dropout": tune.uniform(0.1, 0.5),  # More granular dropout range
         "batch_size": tune.choice([32, 64, 128, 256]),
         "lr": tune.loguniform(1e-5, 1e-2),  # Adjusted learning rate range
         "optimizer": tune.choice([
             torch.optim.AdamW,  # Added AdamW
-            torch.optim.SGD
         ]),
         "lr_scheduler": tune.choice([
             ReduceLROnPlateau,
@@ -471,12 +544,23 @@ def main_autoencoder(num_samples=25, max_num_epochs=50):
                 "div_factor": 25.0
             }
         },
-        "dataset_path": os.path.join(os.getcwd(), "DatasetClassification/TrainDataset.csv"),
+        "dataset_path": dataset_path,
         "max_epochs": max_num_epochs,
         "num_folds": 5,
         "monitor": "val_loss",
         "noise": None,
         "noise_level": 0.00001
+    }
+
+    ray_init_configs = {
+        "num_cpus": psutil.cpu_count(),
+        "num_gpus": torch.cuda.device_count(),
+        "local_mode": False,  # Set to True if continued issues
+        "ignore_reinit_error": True,
+        "include_dashboard": False,  # Disable dashboard to avoid related errors,
+        "num_cpus": psutil.cpu_count(),
+        "num_gpus": torch.cuda.device_count(),
+        "logging_level": logging.WARNING
     }
 
     # Setup paths with timestamps
@@ -486,20 +570,13 @@ def main_autoencoder(num_samples=25, max_num_epochs=50):
     try:
         # Configure Ray with GPU
         ray.init(
-            num_cpus=32,
-            num_gpus=1,
-            _system_config={
-                "automatic_object_spilling_enabled": True,
-                "object_spilling_config": json.dumps(
-                    {"type": "filesystem", "params": {"directory_path": "/tmp/ray_spill"}}
-                ),
-            }
+            **ray_init_configs
         )
 
         # Enhanced resource configuration
         resources_per_trial = {
-            "cpu": 4,  # 32 CPUs / 8 parallel trials
-            "gpu": 0.125  # Allow 8 trials to share 1 GPU
+            "cpu": 4,  # 
+            "gpu": 0.25  #
         }
 
         # Add GPU-specific configurations
@@ -526,10 +603,9 @@ def main_autoencoder(num_samples=25, max_num_epochs=50):
             # search_alg=search_alg,
             storage_path=storage_path,
             keep_checkpoints_num=3,
-            checkpoint_score_attr="mean-val_loss",
+            checkpoint_score_attr="combined_metric",
             stop={
                 "val_loss": 0.001,
-                "training_iteration": max_num_epochs
             },
             # resume=True,
             verbose=1,
